@@ -1,3 +1,22 @@
-.idea
-venv
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.idea/
+.vscode/
+
+# Secrets / local config
+.env
+*.local
+
+# Local data + indexes
+*.db
+*.sqlite
+*.sqlite3
+/data/
 /postgres-data/*
+
+# OS
+.DS_Store
