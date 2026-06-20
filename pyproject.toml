@@ -1,0 +1,22 @@
+[project]
+name = "x-bookmark-brain"
+version = "0.0.1"
+description = "Backfill, auto-categorize, and AI-search X (Twitter) bookmarks."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "jinja2",
+    "httpx",          # X internal GraphQL calls during backfill
+    "boto3",          # Amazon Bedrock (Claude + embeddings)
+    "pydantic",
+    "python-dotenv",
+    # vector index — pick during the search slice (e.g. sqlite-vec or lancedb)
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio", "ruff"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
