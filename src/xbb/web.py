@@ -21,7 +21,25 @@ def create_app():  # pragma: no cover - scaffold
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    # TODO routes: GET /search, POST /ask, GET /categories, GET /categories/{id},
+    @app.get("/search")
+    def search_route(q: str, k: int = 10):  # pragma: no cover - live wiring (Bedrock + db)
+        from .ai import BedrockAIClient
+        from .config import Config
+        from .search import search
+        from .storage import connect
+
+        cfg = Config.from_env()
+        con = connect(cfg.db_path)
+        try:
+            ai = BedrockAIClient(
+                region=cfg.aws_region,
+                embedding_model=cfg.bedrock_embedding_model,
+            )
+            return {"query": q, "results": search(con, ai, q, k)}
+        finally:
+            con.close()
+
+    # TODO routes: POST /ask, GET /categories, GET /categories/{id},
     #              taxonomy review (GET/POST /taxonomy)
     return app
 
