@@ -203,9 +203,11 @@ def category_tree(con: sqlite3.Connection) -> list[dict[str, Any]]:
 
 
 def posts_in_category(con: sqlite3.Connection, category_id: int) -> list[dict[str, Any]]:
+    row = con.execute("SELECT parent FROM categories WHERE id = ?", (category_id,)).fetchone()
+    parent = row[0] if row else None
     return [
         {"id": r[0], "url": r[1], "text": r[2], "handle": r[3],
-         "avatar_url": r[4], "media_json": r[5]}
+         "avatar_url": r[4], "media_json": r[5], "parent": parent}
         for r in con.execute(
             """
             SELECT p.id, p.url, p.text, au.handle, au.avatar_url, p.media_json
@@ -217,4 +219,33 @@ def posts_in_category(con: sqlite3.Connection, category_id: int) -> list[dict[st
             """,
             (category_id,),
         )
+    ]
+
+
+def feed_posts(
+    con: sqlite3.Connection, parent: str | None = None, limit: int = 150
+) -> list[dict[str, Any]]:
+    """Posts for the color feed, each tagged with one parent group (for tinting).
+
+    Filtered to a single parent group when given. A post in multiple groups is shown once,
+    under one group (arbitrary when unfiltered; the matching one when filtered).
+    """
+    cols = """
+        SELECT p.id, p.url, p.text, au.handle, au.avatar_url, p.media_json, c.parent
+        FROM posts p
+        JOIN assignments a ON a.post_id = p.id
+        JOIN categories c ON c.id = a.category_id
+        LEFT JOIN authors au ON au.id = p.author_id
+    """
+    if parent:
+        rows = con.execute(
+            cols + " WHERE c.parent = ? GROUP BY p.id ORDER BY p.rowid LIMIT ?",
+            (parent, limit),
+        )
+    else:
+        rows = con.execute(cols + " GROUP BY p.id ORDER BY p.rowid LIMIT ?", (limit,))
+    return [
+        {"id": r[0], "url": r[1], "text": r[2], "handle": r[3],
+         "avatar_url": r[4], "media_json": r[5], "parent": r[6]}
+        for r in rows
     ]

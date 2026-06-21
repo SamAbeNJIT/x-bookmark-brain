@@ -13,7 +13,7 @@ from . import categorize, jobs
 from .ask import ask
 from .deps import get_ai, get_db
 from .search import search
-from .templates import esc, page, post_card
+from .templates import esc, legend, page, parent_color, post_card
 
 ui_router = APIRouter()
 
@@ -132,6 +132,7 @@ def ui_categories(con=Depends(get_db)):
 
     blocks = []
     for i, group in enumerate(tree):
+        color = parent_color(group["parent"]) or "#9aa0ab"
         children = "".join(
             f'<a class="child" href="/ui/categories/{c["id"]}">'
             f'<span class="grow">{esc(c["name"])}</span>'
@@ -141,14 +142,36 @@ def ui_categories(con=Depends(get_db)):
         # First group open by default so the page doesn't look empty.
         open_attr = " open" if i == 0 else ""
         blocks.append(
-            f"<details{open_attr}><summary>"
-            f'<span class="caret">▶</span><span class="grow">{esc(group["parent"])}</span>'
+            f'<details{open_attr}><summary style="--c:{color}">'
+            f'<span class="caret">▶</span><span class="sw"></span>'
+            f'<span class="grow">{esc(group["parent"])}</span>'
             f'<span class="badge">{group["total"]:,}</span></summary>'
             f'<div class="children">{children}</div></details>'
         )
-    body = '<p class=lead>Browse by topic — click a group to expand its subcategories.</p>'
+    groups = [(g["parent"], g["total"]) for g in tree]
+    body = '<p class=lead>Each topic has a color. Tap one to see just those tweets, or expand a group below.</p>'
+    body += legend(groups)
     body += f'<div class="tree">{"".join(blocks)}</div>'
     return page("Categories", body)
+
+
+@ui_router.get("/ui/feed")
+def ui_feed(parent: str = "", con=Depends(get_db)):
+    tree = categorize.category_tree(con)
+    groups = [(g["parent"], g["total"]) for g in tree]
+    active = parent or None
+    posts = categorize.feed_posts(con, parent=active, limit=150)
+    where = f" in {esc(active)}" if active else ""
+    note = (
+        f'<p class=lead>Showing {len(posts)} tweets{where} '
+        "(most recent first, capped at 150). Tap a color to filter.</p>"
+    )
+    cards = (
+        f'<div class="cards">{"".join(post_card(p) for p in posts)}</div>'
+        if posts
+        else "<p class=muted>No tweets here yet.</p>"
+    )
+    return page("Feed", legend(groups, active) + note + cards)
 
 
 @ui_router.get("/ui/categories/{category_id}")

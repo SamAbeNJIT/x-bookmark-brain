@@ -9,8 +9,39 @@ from __future__ import annotations
 import html
 import json
 from typing import Any
+from urllib.parse import quote
 
 from fastapi.responses import HTMLResponse
+
+# One off-color per top-level group — distinct but muted, used for card tints + the legend.
+PARENT_COLORS: dict[str, str] = {
+    "AI & Engineering": "#5b6cf0",   # indigo
+    "Culture & Media": "#a45cd6",    # violet
+    "Politics & Society": "#e05569", # rose
+    "Finance & Crypto": "#d99a1c",   # amber
+    "Health & Longevity": "#2faa6f", # green
+    "Science & Industry": "#2aa7bd", # teal
+    "Other": "#9aa0ab",              # gray
+}
+
+
+def parent_color(parent: str | None) -> str | None:
+    return PARENT_COLORS.get(parent) if parent else None
+
+
+def legend(groups: list[tuple[str, int]], active: str | None = None) -> str:
+    """Clickable color legend. `groups` is [(parent, count)]; links filter the feed."""
+    all_cls = " active" if active is None else ""
+    chips = [f'<a class="chip{all_cls}" href="/ui/feed">All</a>']
+    for parent, count in groups:
+        c = PARENT_COLORS.get(parent, PARENT_COLORS["Other"])
+        cls = " active" if parent == active else ""
+        chips.append(
+            f'<a class="chip{cls}" href="/ui/feed?parent={quote(parent)}" style="--c:{c}">'
+            f'<span class="sw"></span>{esc(parent)}'
+            f'<span class="badge">{count:,}</span></a>'
+        )
+    return f'<div class="legend">{"".join(chips)}</div>'
 
 _HEAD = (
     '<link rel="preconnect" href="https://fonts.googleapis.com">'
@@ -118,8 +149,23 @@ _STYLE = """
            font-weight: 600; color: var(--muted); background: #efece4; border-radius: 999px;
            padding: .14rem .55rem; }
 
+  /* color legend */
+  .legend { display: flex; gap: .5rem; flex-wrap: wrap; margin: 0 0 1.3rem; }
+  .chip { display: inline-flex; align-items: center; gap: .5rem; padding: .45rem .85rem;
+          border-radius: 999px; border: 1px solid var(--line-2); background: var(--panel);
+          color: var(--ink); font-size: .87rem; font-weight: 500; box-shadow: var(--shadow);
+          transition: border-color .14s, background .14s; }
+  .chip:hover { text-decoration: none; border-color: var(--c, var(--accent)); }
+  .chip .sw { width: .8rem; height: .8rem; border-radius: 50%; flex: 0 0 auto;
+              background: var(--c, var(--muted)); }
+  .chip .badge { background: transparent; color: var(--muted); padding: 0; margin-left: .05rem; }
+  .chip.active { border-color: var(--c, var(--accent));
+                 background: color-mix(in srgb, var(--c, #5b6cf0) 14%, var(--panel)); font-weight: 600; }
+
   /* category tree */
   .tree { max-width: 880px; }
+  .tree .sw { width: .85rem; height: .85rem; border-radius: 50%; flex: 0 0 auto;
+              background: var(--c, var(--muted)); }
   .tree details { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
                   margin: .6rem 0; box-shadow: var(--shadow); overflow: hidden; }
   .tree summary { list-style: none; cursor: pointer; padding: 1rem 1.1rem; font-weight: 600;
@@ -156,6 +202,7 @@ _NAV_ITEMS = [
     ("/ui/search", "Search", "⌕"),
     ("/ui/ask", "Ask", "✦"),
     ("/ui/categories", "Categories", "▤"),
+    ("/ui/feed", "Feed", "▦"),
     ("/ui/taxonomy", "Taxonomy", "⚙"),
     ("/ui/refresh", "Sync", "↻"),
 ]
@@ -220,6 +267,13 @@ def post_card(p: dict[str, Any]) -> str:
     text = esc(p.get("text") or "")
     handle = esc(p.get("handle") or "")
     url = p.get("url")
+    color = parent_color(p.get("parent"))
+    tint = (
+        f' style="background:color-mix(in srgb,{color} 11%,var(--panel));'
+        f'border-color:color-mix(in srgb,{color} 32%,var(--line))"'
+        if color
+        else ""
+    )
     avatar = _avatar_src(p.get("avatar_url"))
     av = (
         f'<img class="avatar" src="{esc(avatar)}" alt="" loading="lazy">'
@@ -237,4 +291,4 @@ def post_card(p: dict[str, Any]) -> str:
     link = f'<a href="{esc(url)}" target="_blank" rel="noopener">open ↗</a>' if url else ""
     score = f'score {p["score"]:.2f} · ' if isinstance(p.get("score"), (int, float)) else ""
     meta = f'<div class="meta">{score}{link}</div>' if (link or score) else ""
-    return f'<div class="post">{head}<div class="body">{text}</div>{media}{meta}</div>'
+    return f'<div class="post"{tint}>{head}<div class="body">{text}</div>{media}{meta}</div>'
