@@ -217,6 +217,7 @@ class GraphQLXClient:
         features: dict[str, bool] | None = None,
         count: int = 20,
         page_pause_s: float = 0.7,
+        start_cursor: str | None = None,
     ) -> None:
         if not auth_token or not csrf_token:
             raise ValueError("auth_token and csrf_token (ct0) are required")
@@ -226,6 +227,11 @@ class GraphQLXClient:
         self.features = features or DEFAULT_FEATURES
         self.count = count
         self.page_pause_s = page_pause_s
+        # Resume support: begin paging from `start_cursor`, and expose `cursor` as the live
+        # position so a backfill can persist it and continue after a rate-limit. `cursor`
+        # becomes None once the timeline is fully paged (the genuine end).
+        self.start_cursor = start_cursor
+        self.cursor: str | None = start_cursor
 
     @property
     def _url(self) -> str:
@@ -299,7 +305,8 @@ class GraphQLXClient:
         return tweets, cursor
 
     def iter_bookmark_pages(self) -> Iterator[list[dict[str, Any]]]:
-        cursor: str | None = None
+        cursor: str | None = self.start_cursor
+        self.cursor = cursor
         seen_cursors: set[str] = set()
         empties = 0
         while True:
@@ -307,11 +314,15 @@ class GraphQLXClient:
             tweets, next_cursor = self._split(page)
             if tweets:
                 empties = 0
-                yield tweets
                 if not next_cursor or next_cursor in seen_cursors:
-                    break  # no advance = real end of the timeline
-                seen_cursors.add(next_cursor)
-                cursor = next_cursor
+                    self.cursor = None        # no advance = real end of the timeline
+                else:
+                    seen_cursors.add(next_cursor)
+                    self.cursor = next_cursor  # resume point for the next page
+                yield tweets
+                if self.cursor is None:
+                    break
+                cursor = self.cursor
                 time.sleep(self.page_pause_s)
             else:
                 # An empty page mid-stream is usually a transient rate-limit, not the
@@ -376,7 +387,9 @@ def _upsert_post(con: Any, rec: dict[str, Any]) -> None:
     )
 
 
-def run_backfill(client: XClient, db_path: str, incremental: bool = False) -> int:
+def run_backfill(
+    client: XClient, db_path: str, incremental: bool = False, resume: bool = False
+) -> int:
     """Page through bookmarks, upsert by post id (idempotent), return count stored.
 
     Stores only the bookmarked posts themselves; the immediate parent (reply) and quoted
@@ -386,9 +399,20 @@ def run_backfill(client: XClient, db_path: str, incremental: bool = False) -> in
     With `incremental=True`, stop once a whole page contains only posts already in the DB.
     Since X returns bookmarks newest-first, that means we've reached previously-synced posts
     — so a top-up fetches just the new slice instead of re-paging the entire timeline.
+
+    With `resume=True`, start paging from the saved cursor (from a previous run that X
+    rate-limited) instead of the top. For a full backfill (not incremental), the live
+    client's pagination cursor is persisted after every page, so a run that stops partway
+    can be continued with `resume=True` rather than re-paging from the start. Cleared when
+    the timeline is fully paged.
     """
     storage.init_db(db_path)
     con = storage.connect(db_path)
+    # Cursor checkpointing only applies to a full backfill on the live client. (Incremental
+    # tops up from the top and would otherwise overwrite the gap-fill resume point.)
+    tracks_cursor = hasattr(client, "cursor") and not incremental
+    if resume and hasattr(client, "start_cursor"):
+        client.start_cursor = storage.get_sync_cursor(con)  # None → start from the top
     count = 0
     try:
         for page in client.iter_bookmark_pages():
@@ -404,8 +428,12 @@ def run_backfill(client: XClient, db_path: str, incremental: bool = False) -> in
                 if not exists:
                     new_in_page += 1
             con.commit()
+            if tracks_cursor:
+                storage.set_sync_cursor(con, getattr(client, "cursor"))  # kill-safe checkpoint
             if incremental and new_in_page == 0:
                 break  # caught up to already-synced bookmarks
     finally:
+        if tracks_cursor:
+            storage.set_sync_cursor(con, getattr(client, "cursor", None))
         con.close()
     return count
