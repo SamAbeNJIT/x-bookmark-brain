@@ -163,8 +163,15 @@ def parse_bookmark(raw: dict[str, Any]) -> dict[str, Any]:
         parent = {"id": parent_post_id, "text": None}
     elif quoted_raw or legacy.get("is_quote_status"):
         kind = "quote"
-        parent = parse_bookmark(quoted_raw) if quoted_raw else None
-        parent_post_id = parent["id"] if parent else legacy.get("quoted_status_id_str")
+        try:
+            parent = parse_bookmark(quoted_raw) if quoted_raw else None
+        except ValueError:
+            parent = None  # quoted payload is a stub (deleted/withheld); keep the id only
+        parent_post_id = (
+            (parent["id"] if parent else None)
+            or (quoted_raw or {}).get("result", {}).get("rest_id")
+            or legacy.get("quoted_status_id_str")
+        )
     else:
         kind = "original"
         parent_post_id = None
@@ -347,8 +354,9 @@ def _upsert_post(con: Any, rec: dict[str, Any]) -> None:
 def run_backfill(client: XClient, db_path: str) -> int:
     """Page through all bookmarks, upsert by post id (idempotent), return count stored.
 
-    Quoted posts captured inline are upserted too (so reply/quote context is browsable), but
-    only the bookmarked posts themselves are counted toward the return value.
+    Stores only the bookmarked posts themselves; the immediate parent (reply) and quoted
+    (quote) posts are retained as ids on each record. Resolving and persisting those
+    parent/quoted bodies and author self-threads is the rich-context slice (#3).
     """
     storage.init_db(db_path)
     con = storage.connect(db_path)
@@ -360,8 +368,6 @@ def run_backfill(client: XClient, db_path: str) -> int:
                     rec = parse_bookmark(raw)
                 except ValueError:
                     continue  # skip non-tweet entries defensively
-                if rec.get("parent") and rec["kind"] == "quote" and rec["parent"].get("id"):
-                    _upsert_post(con, rec["parent"])  # quoted post as its own row
                 _upsert_post(con, rec)
                 count += 1
             con.commit()

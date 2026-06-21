@@ -1,0 +1,28 @@
+{
+  "__typename": "Tweet",
+  "rest_id": "1001",
+  "core": {
+    "user_results": {
+      "result": {
+        "rest_id": "u_alice",
+        "legacy": { "screen_name": "alice", "name": "Alice Researcher" }
+      }
+    }
+  },
+  "legacy": {
+    "full_text": "Thoughts on RAG evaluation: offline metrics lie, ship a golden set.",
+    "lang": "en",
+    "created_at": "Wed Jun 18 10:00:00 +0000 2025",
+    "favorite_count": 42,
+    "retweet_count": 5,
+    "entities": {
+      "hashtags": [{ "text": "RAG" }],
+      "urls": [{ "expanded_url": "https://example.com/rag-eval" }]
+    },
+    "extended_entities": {
+      "media": [
+        { "media_url_https": "https://pbs.twimg.com/media/abc.jpg", "type": "photo", "ext_alt_text": "a precision-recall chart" }
+      ]
+    }
+  }
+}

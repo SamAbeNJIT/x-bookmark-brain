@@ -1,0 +1,21 @@
+{
+  "__typename": "Tweet",
+  "rest_id": "1002",
+  "core": {
+    "user_results": {
+      "result": {
+        "rest_id": "u_bob",
+        "legacy": { "screen_name": "bob", "name": "Bob" }
+      }
+    }
+  },
+  "legacy": {
+    "full_text": "This is exactly right.",
+    "lang": "en",
+    "created_at": "Wed Jun 18 11:30:00 +0000 2025",
+    "in_reply_to_status_id_str": "900",
+    "favorite_count": 3,
+    "retweet_count": 0,
+    "entities": { "hashtags": [], "urls": [] }
+  }
+}
