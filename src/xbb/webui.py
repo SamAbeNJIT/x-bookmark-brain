@@ -79,24 +79,28 @@ def ui_refresh():
 @ui_router.get("/ui/search")
 def ui_search(q: str = "", con=Depends(get_db), ai=Depends(get_ai)):
     form = (
-        f'<form method=get action="/ui/search">'
+        f'<form method=get action="/ui/search" class="narrow">'
         f'<input type=search name=q value="{esc(q)}" '
         f'placeholder="Search your bookmarks…" autofocus></form>'
     )
     results = ""
     if q:
-        hits = search(con, ai, q, 20)
-        results = "".join(post_card(p) for p in hits) or "<p class=muted>No matches.</p>"
+        hits = search(con, ai, q, 24)
+        results = (
+            f'<div class="cards">{"".join(post_card(p) for p in hits)}</div>'
+            if hits
+            else "<p class=muted>No matches.</p>"
+        )
     return page("Search", form + results)
 
 
 @ui_router.get("/ui/ask")
 def ui_ask(question: str = "", con=Depends(get_db), ai=Depends(get_ai)):
     form = (
-        f'<form method=post action="/ui/ask">'
+        f'<form method=post action="/ui/ask" class="narrow">'
         f'<input type=text name=question value="{esc(question)}" '
         f'placeholder="Ask a question about your bookmarks…" autofocus>'
-        f'<div class=row><button>Ask</button></div></form>'
+        f'<div class=row style="margin-top:.5rem"><button>Ask</button></div></form>'
     )
     return page("Ask", form)
 
@@ -107,12 +111,12 @@ def ui_ask_post(question: str = Form(...), con=Depends(get_db), ai=Depends(get_a
     cited = {c for c in result["citations"]}
     cards = "".join(post_card(p) for p in result["retrieved"] if p["id"] in cited)
     form = (
-        f'<form method=post action="/ui/ask">'
-        f'<input type=text name=question value="{esc(question)}"><div class=row>'
-        f'<button>Ask</button></div></form>'
+        f'<form method=post action="/ui/ask" class="narrow">'
+        f'<input type=text name=question value="{esc(question)}"><div class=row '
+        f'style="margin-top:.5rem"><button>Ask</button></div></form>'
     )
     answer = f'<div class="answer">{esc(result.get("answer") or "")}</div>'
-    sources = f"<h3>Cited bookmarks</h3>{cards}" if cards else ""
+    sources = f'<h3>Cited bookmarks</h3><div class="cards">{cards}</div>' if cards else ""
     return page("Ask", form + answer + sources)
 
 
@@ -150,7 +154,11 @@ def ui_categories(con=Depends(get_db)):
 @ui_router.get("/ui/categories/{category_id}")
 def ui_category(category_id: int, con=Depends(get_db)):
     posts = categorize.posts_in_category(con, category_id)
-    cards = "".join(post_card(p) for p in posts) or "<p class=muted>No posts.</p>"
+    cards = (
+        f'<div class="cards">{"".join(post_card(p) for p in posts)}</div>'
+        if posts
+        else "<p class=muted>No posts.</p>"
+    )
     return page("Category", cards)
 
 

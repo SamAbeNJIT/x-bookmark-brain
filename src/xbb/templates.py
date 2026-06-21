@@ -54,8 +54,13 @@ _STYLE = """
   .side-foot { margin-top: auto; font-size: .76rem; color: #5b5d68; padding: .6rem; }
 
   /* content */
-  .content { margin-left: 224px; flex: 1; padding: 2.4rem clamp(1.2rem, 5vw, 3.5rem) 5rem; }
-  .wrap { max-width: 720px; margin: 0 auto; }
+  .content { margin-left: 224px; flex: 1; padding: 2.4rem clamp(1.2rem, 4vw, 3.5rem) 5rem; }
+  .wrap { max-width: 1320px; margin: 0 auto; }
+  /* reading-width blocks stay comfortable even on huge screens */
+  .narrow { max-width: 720px; }
+  /* card lists flow into as many ~340px columns as the screen allows */
+  .cards { display: grid; gap: .85rem; align-items: start;
+           grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
   h1 { font-family: var(--display); font-size: 1.7rem; font-weight: 700; letter-spacing: -.025em;
        margin: 0 0 1.1rem; }
   h3 { font-family: var(--display); margin: 1.4rem 0 .5rem; font-size: 1.02rem; font-weight: 600; }
@@ -98,7 +103,8 @@ _STYLE = """
   /* answer */
   .answer { background: linear-gradient(180deg, #fbfbff, var(--panel)); border: 1px solid var(--line);
             border-left: 4px solid var(--accent); padding: 1.1rem 1.2rem; border-radius: 12px;
-            margin: 1.2rem 0; box-shadow: var(--shadow); white-space: pre-wrap; font-size: .98rem; }
+            margin: 1.2rem 0; max-width: 760px; box-shadow: var(--shadow); white-space: pre-wrap;
+            font-size: .98rem; }
 
   /* stats */
   .stats { display: flex; gap: .7rem; flex-wrap: wrap; margin: 0 0 1.4rem; }
@@ -111,6 +117,7 @@ _STYLE = """
            padding: .14rem .55rem; }
 
   /* category tree */
+  .tree { max-width: 880px; }
   .tree details { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
                   margin: .6rem 0; box-shadow: var(--shadow); overflow: hidden; }
   .tree summary { list-style: none; cursor: pointer; padding: 1rem 1.1rem; font-weight: 600;
