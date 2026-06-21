@@ -147,8 +147,8 @@ DEFAULT_PARENTS: dict[str, str] = {
     "Personal Finance & Wealth Psychology": "Finance & Crypto",
     "Geopolitics & American Power": "Politics & Society",
     "Politics & Social Controversy": "Politics & Society",
-    "Religion, Christianity & Church Criticism": "Politics & Society",
     "Social Dynamics, Dating & Male Psychology": "Politics & Society",
+    "Religion, Christianity & Church Criticism": "Culture & Media",
     "Industrialization, Manufacturing & Hard Tech": "Science & Industry",
     "Science & Emerging Research": "Science & Industry",
     "Humor & Shitposting": "Culture & Media",
@@ -200,10 +200,11 @@ def category_tree(con: sqlite3.Connection) -> list[dict[str, Any]]:
 
 def posts_in_category(con: sqlite3.Connection, category_id: int) -> list[dict[str, Any]]:
     return [
-        {"id": r[0], "url": r[1], "text": r[2], "handle": r[3]}
+        {"id": r[0], "url": r[1], "text": r[2], "handle": r[3],
+         "avatar_url": r[4], "media_json": r[5]}
         for r in con.execute(
             """
-            SELECT p.id, p.url, p.text, au.handle
+            SELECT p.id, p.url, p.text, au.handle, au.avatar_url, p.media_json
             FROM posts p
             JOIN assignments a ON a.post_id = p.id
             LEFT JOIN authors au ON au.id = p.author_id

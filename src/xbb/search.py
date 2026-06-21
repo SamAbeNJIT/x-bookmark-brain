@@ -64,7 +64,7 @@ def index_posts(
 def _load_matrix(con: sqlite3.Connection):
     rows = con.execute(
         """
-        SELECT p.id, p.url, p.text, a.handle, e.vector
+        SELECT p.id, p.url, p.text, a.handle, e.vector, a.avatar_url, p.media_json
         FROM embeddings e
         JOIN posts p ON p.id = e.post_id
         LEFT JOIN authors a ON a.id = p.author_id
@@ -72,7 +72,11 @@ def _load_matrix(con: sqlite3.Connection):
     ).fetchall()
     if not rows:
         return [], None
-    meta = [{"id": r[0], "url": r[1], "text": r[2], "handle": r[3]} for r in rows]
+    meta = [
+        {"id": r[0], "url": r[1], "text": r[2], "handle": r[3],
+         "avatar_url": r[5], "media_json": r[6]}
+        for r in rows
+    ]
     matrix = np.stack([np.frombuffer(r[4], dtype=np.float32) for r in rows])
     return meta, matrix
 

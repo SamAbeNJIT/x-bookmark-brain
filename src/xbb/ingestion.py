@@ -107,10 +107,14 @@ def _author(tweet: dict[str, Any]) -> dict[str, Any]:
     user = tweet.get("core", {}).get("user_results", {}).get("result", {}) or {}
     legacy = user.get("legacy", {}) or {}
     core = user.get("core", {}) or {}  # newer payloads put handle/name here
+    avatar = (user.get("avatar") or {}).get("image_url") or legacy.get(
+        "profile_image_url_https"
+    )
     return {
         "id": user.get("rest_id"),
         "handle": core.get("screen_name") or legacy.get("screen_name"),
         "display_name": core.get("name") or legacy.get("name"),
+        "avatar_url": avatar,
     }
 
 
@@ -326,9 +330,10 @@ def _upsert_author(con: Any, author: dict[str, Any]) -> None:
     if not author.get("id"):
         return
     con.execute(
-        "INSERT INTO authors (id, handle, display_name) VALUES (?, ?, ?) "
-        "ON CONFLICT(id) DO UPDATE SET handle=excluded.handle, display_name=excluded.display_name",
-        (author["id"], author.get("handle"), author.get("display_name")),
+        "INSERT INTO authors (id, handle, display_name, avatar_url) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET handle=excluded.handle, "
+        "display_name=excluded.display_name, avatar_url=excluded.avatar_url",
+        (author["id"], author.get("handle"), author.get("display_name"), author.get("avatar_url")),
     )
 
 

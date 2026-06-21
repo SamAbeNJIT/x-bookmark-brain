@@ -7,6 +7,7 @@ view layer in one readable place.
 from __future__ import annotations
 
 import html
+import json
 from typing import Any
 
 from fastapi.responses import HTMLResponse
@@ -37,8 +38,16 @@ _STYLE = """
           padding: .85rem 1rem; margin: .6rem 0; box-shadow: var(--shadow);
           transition: border-color .15s, transform .15s; }
   .post:hover { border-color: #cdd3df; transform: translateY(-1px); }
+  .post .head { display: flex; align-items: center; gap: .55rem; margin-bottom: .55rem; }
+  .avatar { width: 38px; height: 38px; border-radius: 50%; object-fit: cover;
+            background: #e6e8ec; flex: 0 0 auto; }
+  .handle { font-weight: 600; color: var(--ink); }
+  .handle:hover { color: var(--accent); }
   .post .body { white-space: pre-wrap; }
-  .post .meta { color: var(--muted); font-size: .82rem; margin-top: .45rem; }
+  .media-row { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .65rem; }
+  .media { max-width: 240px; max-height: 240px; border-radius: 10px;
+           border: 1px solid var(--line); object-fit: cover; display: block; }
+  .post .meta { color: var(--muted); font-size: .82rem; margin-top: .55rem; }
   input[type=text], input[type=search] { width: 100%; padding: .65rem .8rem; font-size: 1rem;
          border: 1px solid #d2d6de; border-radius: 10px; background: var(--card);
          box-shadow: var(--shadow); }
@@ -103,11 +112,47 @@ def page(title: str, body: str) -> HTMLResponse:
     )
 
 
+def _avatar_src(url: str | None) -> str | None:
+    # Bump X's 48px "_normal" avatar to the 73px "_bigger" for crisp retina display.
+    return url.replace("_normal.", "_bigger.") if url else url
+
+
+def _media_imgs(media_json: Any) -> str:
+    if not media_json:
+        return ""
+    try:
+        media = json.loads(media_json) if isinstance(media_json, str) else media_json
+    except (ValueError, TypeError):
+        return ""
+    imgs = "".join(
+        f'<a href="{esc(m["url"])}" target="_blank" rel="noopener">'
+        f'<img class="media" src="{esc(m["url"])}" alt="{esc(m.get("alt_text") or "")}" '
+        f'loading="lazy"></a>'
+        for m in media
+        if isinstance(m, dict) and m.get("url")
+    )
+    return f'<div class="media-row">{imgs}</div>' if imgs else ""
+
+
 def post_card(p: dict[str, Any]) -> str:
     text = esc(p.get("text") or "")
     handle = esc(p.get("handle") or "")
     url = p.get("url")
-    link = f' · <a href="{esc(url)}" target="_blank" rel="noopener">open ↗</a>' if url else ""
-    score = f' · score {p["score"]:.2f}' if isinstance(p.get("score"), (int, float)) else ""
-    at = f"@{handle}" if handle else ""
-    return f'<div class="post"><div class="body">{text}</div><div class="meta">{at}{score}{link}</div></div>'
+    avatar = _avatar_src(p.get("avatar_url"))
+    av = (
+        f'<img class="avatar" src="{esc(avatar)}" alt="" loading="lazy">'
+        if avatar
+        else '<div class="avatar"></div>'
+    )
+    at = (
+        f'<a class="handle" href="https://x.com/{handle}" target="_blank" '
+        f'rel="noopener">@{handle}</a>'
+        if handle
+        else ""
+    )
+    head = f'<div class="head">{av}{at}</div>'
+    media = _media_imgs(p.get("media_json"))
+    link = f'<a href="{esc(url)}" target="_blank" rel="noopener">open ↗</a>' if url else ""
+    score = f'score {p["score"]:.2f} · ' if isinstance(p.get("score"), (int, float)) else ""
+    meta = f'<div class="meta">{score}{link}</div>' if (link or score) else ""
+    return f'<div class="post">{head}<div class="body">{text}</div>{media}{meta}</div>'

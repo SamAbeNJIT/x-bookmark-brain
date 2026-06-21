@@ -14,7 +14,8 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS authors (
     id            TEXT PRIMARY KEY,
     handle        TEXT,
-    display_name  TEXT
+    display_name  TEXT,
+    avatar_url    TEXT                -- profile image URL (pbs.twimg.com), nullable
 );
 
 CREATE TABLE IF NOT EXISTS posts (
@@ -77,10 +78,13 @@ def init_db(db_path: str) -> None:
     con = connect(db_path)
     try:
         con.executescript(SCHEMA)
-        # Migration: add categories.parent to databases created before the tree feature.
-        cols = [r[1] for r in con.execute("PRAGMA table_info(categories)")]
-        if "parent" not in cols:
+        # Migrations: add columns to databases created before these features.
+        cat_cols = [r[1] for r in con.execute("PRAGMA table_info(categories)")]
+        if "parent" not in cat_cols:
             con.execute("ALTER TABLE categories ADD COLUMN parent TEXT")
+        author_cols = [r[1] for r in con.execute("PRAGMA table_info(authors)")]
+        if "avatar_url" not in author_cols:
+            con.execute("ALTER TABLE authors ADD COLUMN avatar_url TEXT")
         con.commit()
     finally:
         con.close()
