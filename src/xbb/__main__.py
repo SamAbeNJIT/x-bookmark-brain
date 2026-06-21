@@ -90,6 +90,7 @@ def _categorize() -> int:
             proposed = categorize.derive_taxonomy(con, ai)
             categorize.save_taxonomy(con, proposed)
             print(f"  proposed {len(proposed)} categories (refine them on the taxonomy page).")
+        categorize.apply_default_parents(con)  # group categories for the tree view
         print("Assigning categories (resumable) ...")
         n = categorize.assign_unassigned(con, ai, progress=_progress)
     finally:

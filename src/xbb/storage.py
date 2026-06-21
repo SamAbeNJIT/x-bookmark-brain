@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS self_thread_posts (
 CREATE TABLE IF NOT EXISTS categories (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     name       TEXT UNIQUE,
-    definition TEXT
+    definition TEXT,
+    parent     TEXT                -- top-level grouping for the category tree, nullable
 );
 
 CREATE TABLE IF NOT EXISTS assignments (
@@ -76,6 +77,10 @@ def init_db(db_path: str) -> None:
     con = connect(db_path)
     try:
         con.executescript(SCHEMA)
+        # Migration: add categories.parent to databases created before the tree feature.
+        cols = [r[1] for r in con.execute("PRAGMA table_info(categories)")]
+        if "parent" not in cols:
+            con.execute("ALTER TABLE categories ADD COLUMN parent TEXT")
         con.commit()
     finally:
         con.close()

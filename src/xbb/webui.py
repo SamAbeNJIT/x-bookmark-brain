@@ -24,13 +24,17 @@ def home(con=Depends(get_db)):
     cats = con.execute("SELECT COUNT(*) FROM categories").fetchone()[0]
     embedded = con.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
     body = (
-        f"<p><b>{posts}</b> bookmarks · <b>{cats}</b> categories · "
-        f"<b>{embedded}</b> embedded for search.</p>"
-        "<p>Find a saved post by <a href='/ui/search'>searching</a>, "
+        '<div class="stats">'
+        f'<div class="stat"><b>{posts:,}</b> bookmarks</div>'
+        f'<div class="stat"><b>{cats}</b> categories</div>'
+        f'<div class="stat"><b>{embedded:,}</b> embedded</div>'
+        "</div>"
+        "<p class=lead>Find a saved post by "
+        "<a href='/ui/search'>searching by meaning</a>, "
         "<a href='/ui/ask'>asking a question</a>, or "
         "<a href='/ui/categories'>browsing by category</a>.</p>"
     )
-    return page("x-bookmark-brain", body)
+    return page("Your bookmark brain", body)
 
 
 @ui_router.get("/ui/search")
@@ -75,16 +79,32 @@ def ui_ask_post(question: str = Form(...), con=Depends(get_db), ai=Depends(get_a
 
 @ui_router.get("/ui/categories")
 def ui_categories(con=Depends(get_db)):
-    cats = categorize.categories_with_counts(con)
-    if not cats:
-        body = "<p class=muted>No categories yet. Build one on the "
-        body += "<a href='/ui/taxonomy'>taxonomy</a> page.</p>"
-    else:
-        body = "".join(
-            f'<div class="post"><a href="/ui/categories/{c["id"]}">{esc(c["name"])}</a> '
-            f'<span class=meta>({c["count"]})</span></div>'
-            for c in cats
+    tree = categorize.category_tree(con)
+    if not tree:
+        body = (
+            "<p class=muted>No categories yet. Build one on the "
+            "<a href='/ui/taxonomy'>taxonomy</a> page.</p>"
         )
+        return page("Categories", body)
+
+    blocks = []
+    for i, group in enumerate(tree):
+        children = "".join(
+            f'<a class="child" href="/ui/categories/{c["id"]}">'
+            f'<span class="grow">{esc(c["name"])}</span>'
+            f'<span class="badge">{c["count"]:,}</span></a>'
+            for c in group["children"]
+        )
+        # First group open by default so the page doesn't look empty.
+        open_attr = " open" if i == 0 else ""
+        blocks.append(
+            f"<details{open_attr}><summary>"
+            f'<span class="caret">▶</span><span class="grow">{esc(group["parent"])}</span>'
+            f'<span class="badge">{group["total"]:,}</span></summary>'
+            f'<div class="children">{children}</div></details>'
+        )
+    body = '<p class=lead>Browse by topic — click a group to expand its subcategories.</p>'
+    body += f'<div class="tree">{"".join(blocks)}</div>'
     return page("Categories", body)
 
 

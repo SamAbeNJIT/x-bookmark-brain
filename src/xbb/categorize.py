@@ -129,6 +129,75 @@ def categories_with_counts(con: sqlite3.Connection) -> list[dict[str, Any]]:
     ]
 
 
+# Top-level groupings for the category tree. Maps a category name → its parent group.
+# Categories not listed here (e.g. newly derived ones) fall under "Other" in the tree.
+DEFAULT_PARENTS: dict[str, str] = {
+    "AI Model Benchmarks & Comparisons": "AI & Engineering",
+    "AI Coding Agents & Automation Loops": "AI & Engineering",
+    "Open Source & Local AI Models": "AI & Engineering",
+    "AI Developer Tools & Infrastructure": "AI & Engineering",
+    "AI Industry News & Geopolitics": "AI & Engineering",
+    "Productivity & Agentic Workflow Tips": "AI & Engineering",
+    "Biotech & Medical Innovation": "Health & Longevity",
+    "Peptides, Nootropics & Biohacking": "Health & Longevity",
+    "Hormones, Lab Work & Metabolic Health": "Health & Longevity",
+    "Nutrition, Diet & Lifestyle": "Health & Longevity",
+    "Ethereum & Crypto Investing": "Finance & Crypto",
+    "Stock Picks & Investment Theses": "Finance & Crypto",
+    "Personal Finance & Wealth Psychology": "Finance & Crypto",
+    "Geopolitics & American Power": "Politics & Society",
+    "Politics & Social Controversy": "Politics & Society",
+    "Religion, Christianity & Church Criticism": "Politics & Society",
+    "Social Dynamics, Dating & Male Psychology": "Politics & Society",
+    "Industrialization, Manufacturing & Hard Tech": "Science & Industry",
+    "Science & Emerging Research": "Science & Industry",
+    "Humor & Shitposting": "Culture & Media",
+    "Quotes, History & Wisdom": "Culture & Media",
+    "Book & Media Recommendations": "Culture & Media",
+}
+
+
+def apply_default_parents(con: sqlite3.Connection) -> int:
+    """Set categories.parent from DEFAULT_PARENTS by name. Returns rows updated."""
+    n = 0
+    for name, parent in DEFAULT_PARENTS.items():
+        cur = con.execute(
+            "UPDATE categories SET parent = ? WHERE name = ?", (parent, name)
+        )
+        n += cur.rowcount
+    con.commit()
+    return n
+
+
+def category_tree(con: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Group categories under their parent for the tree view.
+
+    Returns [{parent, total, children: [{id, name, count}]}], parents sorted by total
+    descending and children by count descending. Unparented categories group under "Other".
+    """
+    rows = con.execute(
+        """
+        SELECT c.id, c.name, c.parent, COUNT(a.post_id)
+        FROM categories c
+        LEFT JOIN assignments a ON a.category_id = c.id
+        GROUP BY c.id, c.name, c.parent
+        """
+    ).fetchall()
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for cid, name, parent, count in rows:
+        groups.setdefault(parent or "Other", []).append(
+            {"id": cid, "name": name, "count": count}
+        )
+    tree = []
+    for parent, children in groups.items():
+        children.sort(key=lambda c: -c["count"])
+        tree.append(
+            {"parent": parent, "total": sum(c["count"] for c in children), "children": children}
+        )
+    tree.sort(key=lambda g: -g["total"])
+    return tree
+
+
 def posts_in_category(con: sqlite3.Connection, category_id: int) -> list[dict[str, Any]]:
     return [
         {"id": r[0], "url": r[1], "text": r[2], "handle": r[3]}
