@@ -102,11 +102,16 @@ def assign_unassigned(
         """
     ).fetchall()
     total = len(rows)
+    processed = 0
     for i, (post_id,) in enumerate(rows, 1):
-        assign_post(con, ai, post_id)
+        try:
+            assign_post(con, ai, post_id)
+            processed += 1
+        except Exception:
+            pass  # never let one bad post abort the batch; a re-run retries it
         if progress is not None:
             progress(i, total)
-    return total
+    return processed
 
 
 def categories_with_counts(con: sqlite3.Connection) -> list[dict[str, Any]]:

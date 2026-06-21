@@ -256,8 +256,19 @@ class GraphQLXClient:
             "variables": json.dumps(variables, separators=(",", ":")),
             "features": json.dumps(self.features, separators=(",", ":")),
         }
-        resp = httpx.get(self._url, headers=self._headers, params=params, timeout=30.0)
-        resp.raise_for_status()
+        delay = 30.0
+        for _ in range(6):
+            resp = httpx.get(self._url, headers=self._headers, params=params, timeout=30.0)
+            if resp.status_code == 429:
+                # X bookmarks rate limit (resets on a ~15-min window). Honor Retry-After,
+                # else back off and retry rather than aborting the whole backfill.
+                wait = float(resp.headers.get("retry-after", 0)) or delay
+                time.sleep(min(wait, 300.0))
+                delay = min(delay * 2, 300.0)
+                continue
+            resp.raise_for_status()
+            return resp.json()
+        resp.raise_for_status()  # exhausted retries
         return resp.json()
 
     @staticmethod
@@ -286,17 +297,26 @@ class GraphQLXClient:
     def iter_bookmark_pages(self) -> Iterator[list[dict[str, Any]]]:
         cursor: str | None = None
         seen_cursors: set[str] = set()
+        empties = 0
         while True:
             page = self._fetch(cursor)
             tweets, next_cursor = self._split(page)
-            if not tweets:
-                break  # empty page = end of the timeline
-            yield tweets
-            if not next_cursor or next_cursor in seen_cursors:
-                break  # no advance = done
-            seen_cursors.add(next_cursor)
-            cursor = next_cursor
-            time.sleep(self.page_pause_s)
+            if tweets:
+                empties = 0
+                yield tweets
+                if not next_cursor or next_cursor in seen_cursors:
+                    break  # no advance = real end of the timeline
+                seen_cursors.add(next_cursor)
+                cursor = next_cursor
+                time.sleep(self.page_pause_s)
+            else:
+                # An empty page mid-stream is usually a transient rate-limit, not the
+                # end. Back off and retry the SAME cursor; only stop after several in a
+                # row (sustained empties = genuine end or a hard block).
+                empties += 1
+                if empties >= 4:
+                    break
+                time.sleep(self.page_pause_s * 5)
 
 
 # --------------------------------------------------------------------------- backfill

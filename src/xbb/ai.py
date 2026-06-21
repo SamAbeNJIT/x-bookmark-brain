@@ -13,8 +13,31 @@ interface).
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any, Protocol
+
+
+def _extract_json(text: str) -> Any:
+    """Parse JSON from a model reply that may include prose or ```json fences.
+
+    Claude on Bedrock often wraps a JSON array/object in explanation or markdown
+    fences despite "reply with ONLY JSON" instructions. Strip fences, else fall back
+    to the first balanced [...] / {...} span.
+    """
+    s = text.strip()
+    fence = re.search(r"```(?:json)?\s*(.*?)```", s, re.DOTALL)
+    if fence:
+        s = fence.group(1).strip()
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        pass
+    start = min((i for i in (s.find("["), s.find("{")) if i != -1), default=-1)
+    end = max(s.rfind("]"), s.rfind("}"))
+    if start != -1 and end > start:
+        return json.loads(s[start : end + 1])
+    raise ValueError(f"no JSON found in model reply: {text[:200]!r}")
 
 
 class AIClient(Protocol):
@@ -99,7 +122,7 @@ class BedrockAIClient:
             "sample. Reply with ONLY a JSON array of {\"name\", \"definition\"} objects."
         )
         user = "Sample posts:\n" + "\n---\n".join(samples)
-        return json.loads(self._invoke_claude(self.reasoning_model, system, user))
+        return _extract_json(self._invoke_claude(self.reasoning_model, system, user))
 
     def assign_categories(self, text: str, taxonomy: list[dict[str, str]]) -> list[str]:  # pragma: no cover
         system = (
@@ -107,7 +130,11 @@ class BedrockAIClient:
             "array of category names, chosen strictly from the provided taxonomy."
         )
         user = f"Taxonomy: {json.dumps(taxonomy)}\n\nPost:\n{text}"
-        return json.loads(self._invoke_claude(self.labeling_model, system, user))
+        try:
+            result = _extract_json(self._invoke_claude(self.labeling_model, system, user))
+        except ValueError:
+            return []  # e.g. a URL-only post → model replies in prose, not JSON; no labels
+        return [c for c in result if isinstance(c, str)] if isinstance(result, list) else []
 
     def answer(self, question: str, retrieved: list[dict[str, Any]]) -> dict[str, Any]:  # pragma: no cover
         system = (
@@ -115,4 +142,4 @@ class BedrockAIClient:
             "use by their id. Reply with ONLY JSON: {\"answer\": str, \"citations\": [post_id]}."
         )
         user = f"Question: {question}\n\nPosts:\n{json.dumps(retrieved)}"
-        return json.loads(self._invoke_claude(self.reasoning_model, system, user))
+        return _extract_json(self._invoke_claude(self.reasoning_model, system, user))
