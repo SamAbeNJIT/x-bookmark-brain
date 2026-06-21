@@ -11,6 +11,7 @@ dependencies = [
     "boto3",          # Amazon Bedrock (Claude + embeddings)
     "pydantic",
     "python-dotenv",
+    "python-multipart",  # HTML form posts for the web UI
     # vector index — pick during the search slice (e.g. sqlite-vec or lancedb)
 ]
 

@@ -14,6 +14,7 @@ from . import categorize
 from .ask import ask
 from .deps import get_ai, get_db
 from .search import index_posts, search
+from .webui import ui_router
 
 
 class Category(BaseModel):
@@ -96,6 +97,9 @@ def create_app() -> FastAPI:
     @app.post("/ask")
     def ask_route(body: AskIn, con=Depends(get_db), ai=Depends(get_ai)):
         return ask(con, ai, body.question, body.k)
+
+    # HTML screens (issues #4–#7 UI), wired to the same logic + dependencies.
+    app.include_router(ui_router)
 
     return app
 
