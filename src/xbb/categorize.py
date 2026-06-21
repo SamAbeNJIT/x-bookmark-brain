@@ -14,10 +14,14 @@ from .ai import AIClient
 
 # --- #5: taxonomy derivation + review -------------------------------------------------
 
-def derive_taxonomy(con: sqlite3.Connection, ai: AIClient, sample_size: int = 200) -> list[dict[str, str]]:
-    """Ask the AI seam to propose a starter taxonomy from a sample of post texts."""
+def derive_taxonomy(con: sqlite3.Connection, ai: AIClient, sample_size: int = 500) -> list[dict[str, str]]:
+    """Ask the AI seam to propose a starter taxonomy from a sample of post texts.
+
+    Samples randomly across the whole corpus (not insertion/recency order) so the proposed
+    categories reflect the user's full history, not just what they bookmarked most recently.
+    """
     texts = [r[0] for r in con.execute(
-        "SELECT text FROM posts WHERE text IS NOT NULL LIMIT ?", (sample_size,)
+        "SELECT text FROM posts WHERE text IS NOT NULL ORDER BY RANDOM() LIMIT ?", (sample_size,)
     )]
     return ai.derive_taxonomy(texts)
 
