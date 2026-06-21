@@ -148,6 +148,7 @@ _NAV_ITEMS = [
     ("/ui/ask", "Ask", "✦"),
     ("/ui/categories", "Categories", "▤"),
     ("/ui/taxonomy", "Taxonomy", "⚙"),
+    ("/ui/refresh", "Sync", "↻"),
 ]
 
 _SIDEBAR = (

@@ -376,26 +376,36 @@ def _upsert_post(con: Any, rec: dict[str, Any]) -> None:
     )
 
 
-def run_backfill(client: XClient, db_path: str) -> int:
-    """Page through all bookmarks, upsert by post id (idempotent), return count stored.
+def run_backfill(client: XClient, db_path: str, incremental: bool = False) -> int:
+    """Page through bookmarks, upsert by post id (idempotent), return count stored.
 
     Stores only the bookmarked posts themselves; the immediate parent (reply) and quoted
     (quote) posts are retained as ids on each record. Resolving and persisting those
     parent/quoted bodies and author self-threads is the rich-context slice (#3).
+
+    With `incremental=True`, stop once a whole page contains only posts already in the DB.
+    Since X returns bookmarks newest-first, that means we've reached previously-synced posts
+    — so a top-up fetches just the new slice instead of re-paging the entire timeline.
     """
     storage.init_db(db_path)
     con = storage.connect(db_path)
     count = 0
     try:
         for page in client.iter_bookmark_pages():
+            new_in_page = 0
             for raw in page:
                 try:
                     rec = parse_bookmark(raw)
                 except ValueError:
                     continue  # skip non-tweet entries defensively
+                exists = con.execute("SELECT 1 FROM posts WHERE id = ?", (rec["id"],)).fetchone()
                 _upsert_post(con, rec)
                 count += 1
+                if not exists:
+                    new_in_page += 1
             con.commit()
+            if incremental and new_in_page == 0:
+                break  # caught up to already-synced bookmarks
     finally:
         con.close()
     return count

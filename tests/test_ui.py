@@ -28,6 +28,12 @@ def test_ask_ui_returns_answer(client):
     assert "Synthesized answer" in r.text
 
 
+def test_refresh_ui_renders(client):
+    r = client.get("/ui/refresh")  # GET is side-effect free (POST would trigger a sync)
+    assert r.status_code == 200
+    assert "Sync" in r.text
+
+
 def test_taxonomy_derive_via_ui(client):
     r = client.post("/ui/taxonomy/derive", follow_redirects=True)
     assert r.status_code == 200

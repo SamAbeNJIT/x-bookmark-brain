@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Form
 from fastapi.responses import RedirectResponse
 
-from . import categorize
+from . import categorize, jobs
 from .ask import ask
 from .deps import get_ai, get_db
 from .search import search
@@ -33,8 +33,47 @@ def home(con=Depends(get_db)):
         "<a href='/ui/search'>searching by meaning</a>, "
         "<a href='/ui/ask'>asking a question</a>, or "
         "<a href='/ui/categories'>browsing by category</a>.</p>"
+        '<form method=post action="/ui/refresh">'
+        "<button>↻ Sync new bookmarks</button> "
+        "<span class=muted>pulls, embeds &amp; labels anything new</span></form>"
     )
     return page("Your bookmark brain", body)
+
+
+@ui_router.post("/ui/refresh")
+def ui_refresh_start():
+    jobs.start()
+    return RedirectResponse(url="/ui/refresh", status_code=303)
+
+
+@ui_router.get("/ui/refresh")
+def ui_refresh():
+    s = jobs.status()
+    running = s["running"]
+    if s["error"]:
+        state = f'<div class="answer" style="border-left-color:#d64545">⚠️ {esc(s["error"])}</div>'
+    elif s["step"] == "done":
+        state = f'<div class="answer">✅ {esc(s["detail"])}</div>'
+    elif running:
+        state = (
+            f'<div class="answer">⏳ <b>{esc(s["step"])}</b> — {esc(s["detail"])}'
+            "<br><span class=muted>This page refreshes automatically…</span></div>"
+            "<script>setTimeout(function(){location.reload()},3000)</script>"
+        )
+    else:
+        state = '<p class=lead>Pull, embed and label any bookmarks added since the last sync.</p>'
+
+    btn_label = "Syncing…" if running else "↻ Sync now"
+    disabled = " disabled" if running else ""
+    form = (
+        f'<form method=post action="/ui/refresh"><button{disabled}>{btn_label}</button></form>'
+    )
+    note = (
+        "<p class=muted style='margin-top:1.4rem'>Incremental — it stops as soon as it "
+        "reaches bookmarks already synced, so it only fetches what's new. New posts cost "
+        "a fraction of a cent each to embed and label.</p>"
+    )
+    return page("Sync", state + form + note)
 
 
 @ui_router.get("/ui/search")
