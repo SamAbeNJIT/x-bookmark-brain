@@ -6,8 +6,10 @@ same `get_db` / `get_ai` dependencies. Kept in its own router so it barely touch
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, Form
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from . import categorize, jobs
 from .ask import ask
@@ -155,23 +157,43 @@ def ui_categories(con=Depends(get_db)):
     return page("Categories", body)
 
 
+_PAGE = 150
+
+
 @ui_router.get("/ui/feed")
-def ui_feed(parent: str = "", con=Depends(get_db)):
-    tree = categorize.category_tree(con)
-    groups = [(g["parent"], g["total"]) for g in tree]
+def ui_feed(parent: str = "", offset: int = 0, partial: int = 0, con=Depends(get_db)):
     active = parent or None
-    posts = categorize.feed_posts(con, parent=active, limit=150)
+    posts = categorize.feed_posts(con, parent=active, limit=_PAGE, offset=offset)
+
+    # Partial: just the card HTML, for the infinite-scroll appender to insert.
+    if partial:
+        return HTMLResponse("".join(post_card(p) for p in posts))
+
+    groups = [(g["parent"], g["total"]) for g in categorize.category_tree(con)]
     where = f" in {esc(active)}" if active else ""
-    note = (
-        f'<p class=lead>Showing {len(posts)} tweets{where} '
-        "(most recent first, capped at 150). Tap a color to filter.</p>"
+    note = f"<p class=lead>Newest first{where} · scroll to keep loading. Tap a color to filter.</p>"
+    if not posts:
+        return page("Feed", legend(groups, active) + "<p class=muted>No tweets here yet.</p>")
+
+    feed = f'<div id="feed" class="cards">{"".join(post_card(p) for p in posts)}</div>'
+    sentinel = '<div id="more" class="muted" style="text-align:center;padding:1.6rem">loading…</div>'
+    done = "true" if len(posts) < _PAGE else "false"
+    js = (
+        "<script>(function(){var off=" + str(_PAGE) + ",busy=false,done=" + done
+        + ",parent=" + json.dumps(active or "")
+        + ",feed=document.getElementById('feed'),more=document.getElementById('more');"
+        "if(done){more.remove();return;}"
+        "var io=new IntersectionObserver(function(es){"
+        "if(!es[0].isIntersecting||busy||done)return;busy=true;"
+        "var u='/ui/feed?partial=1&offset='+off+(parent?'&parent='+encodeURIComponent(parent):'');"
+        "fetch(u).then(function(r){return r.text();}).then(function(h){"
+        "var n=(h.match(/class=\"post\"/g)||[]).length;"
+        "if(n===0){done=true;more.remove();return;}"
+        "feed.insertAdjacentHTML('beforeend',h);off+=" + str(_PAGE) + ";busy=false;"
+        "if(n<" + str(_PAGE) + "){done=true;more.remove();}"
+        "});});io.observe(more);})();</script>"
     )
-    cards = (
-        f'<div class="cards">{"".join(post_card(p) for p in posts)}</div>'
-        if posts
-        else "<p class=muted>No tweets here yet.</p>"
-    )
-    return page("Feed", legend(groups, active) + note + cards)
+    return page("Feed", legend(groups, active) + note + feed + sentinel + js)
 
 
 @ui_router.get("/ui/categories/{category_id}")

@@ -223,12 +223,13 @@ def posts_in_category(con: sqlite3.Connection, category_id: int) -> list[dict[st
 
 
 def feed_posts(
-    con: sqlite3.Connection, parent: str | None = None, limit: int = 150
+    con: sqlite3.Connection, parent: str | None = None, limit: int = 150, offset: int = 0
 ) -> list[dict[str, Any]]:
-    """Posts for the color feed, each tagged with one parent group (for tinting).
+    """A page of posts for the color feed, each tagged with one parent group (for tinting).
 
     Filtered to a single parent group when given. A post in multiple groups is shown once,
-    under one group (arbitrary when unfiltered; the matching one when filtered).
+    under one group (arbitrary when unfiltered; the matching one when filtered). `offset`
+    drives the rolling/infinite-scroll paging.
     """
     cols = """
         SELECT p.id, p.url, p.text, au.handle, au.avatar_url, p.media_json, c.parent
@@ -239,11 +240,13 @@ def feed_posts(
     """
     if parent:
         rows = con.execute(
-            cols + " WHERE c.parent = ? GROUP BY p.id ORDER BY p.rowid LIMIT ?",
-            (parent, limit),
+            cols + " WHERE c.parent = ? GROUP BY p.id ORDER BY p.rowid LIMIT ? OFFSET ?",
+            (parent, limit, offset),
         )
     else:
-        rows = con.execute(cols + " GROUP BY p.id ORDER BY p.rowid LIMIT ?", (limit,))
+        rows = con.execute(
+            cols + " GROUP BY p.id ORDER BY p.rowid LIMIT ? OFFSET ?", (limit, offset)
+        )
     return [
         {"id": r[0], "url": r[1], "text": r[2], "handle": r[3],
          "avatar_url": r[4], "media_json": r[5], "parent": r[6]}
