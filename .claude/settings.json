@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -e \"$HOME/.claude/skills/to-prd/SKILL.md\" ] || (cd \"$HOME\" && npx --yes skills add mattpocock/skills -y >/dev/null 2>&1)"
+          }
+        ]
+      }
+    ]
+  }
+}
