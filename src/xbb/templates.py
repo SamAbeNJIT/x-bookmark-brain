@@ -134,6 +134,7 @@ _STYLE = """
   .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
   .thinking { display: inline-flex; align-items: center; gap: .5rem; color: var(--muted);
               font-size: .9rem; }
+  .thinking[hidden] { display: none; }  /* author display rule otherwise defeats [hidden] */
   .spinner { width: 1.05rem; height: 1.05rem; border: 2px solid var(--line-2);
              border-top-color: var(--accent); border-radius: 50%; display: inline-block;
              animation: spin .7s linear infinite; }
