@@ -60,6 +60,11 @@ CREATE TABLE IF NOT EXISTS embeddings (
     post_id TEXT PRIMARY KEY REFERENCES posts(id),
     vector  BLOB
 );
+
+CREATE TABLE IF NOT EXISTS sync_state (
+    key   TEXT PRIMARY KEY,   -- e.g. 'bookmarks_cursor'
+    value TEXT
+);
 """
 
 
@@ -90,3 +95,22 @@ def init_db(db_path: str) -> None:
         con.commit()
     finally:
         con.close()
+
+
+def get_sync_cursor(con: sqlite3.Connection) -> str | None:
+    """The saved bookmarks pagination cursor to resume from, or None (never started / done)."""
+    row = con.execute("SELECT value FROM sync_state WHERE key = 'bookmarks_cursor'").fetchone()
+    return row[0] if row and row[0] else None
+
+
+def set_sync_cursor(con: sqlite3.Connection, cursor: str | None) -> None:
+    """Persist where the next backfill should resume. None clears it (the sync finished)."""
+    if cursor:
+        con.execute(
+            "INSERT INTO sync_state (key, value) VALUES ('bookmarks_cursor', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (cursor,),
+        )
+    else:
+        con.execute("DELETE FROM sync_state WHERE key = 'bookmarks_cursor'")
+    con.commit()

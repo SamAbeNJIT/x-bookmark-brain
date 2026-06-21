@@ -1,6 +1,7 @@
 """CLI admin actions.
 
-    python -m xbb backfill     # pull your X bookmarks into the local DB (needs X cookies)
+    python -m xbb backfill            # pull your X bookmarks into the local DB (needs X cookies)
+    python -m xbb backfill --resume   # continue a backfill X rate-limited (from the saved cursor)
     python -m xbb index        # embed bookmarks for semantic search (needs Bedrock)
     python -m xbb categorize   # derive a taxonomy (first run) + label bookmarks (needs Bedrock)
 
@@ -54,9 +55,12 @@ def _backfill() -> int:
         csrf_token=cfg.x_csrf_token,
         query_id=os.getenv("X_BOOKMARKS_QUERY_ID", DEFAULT_QUERY_ID),
     )
-    print(f"Backfilling bookmarks into {cfg.db_path} ...")
-    n = run_backfill(client, cfg.db_path)
-    print(f"Done. {n} bookmarks stored/updated in {cfg.db_path}.")
+    resume = "--resume" in sys.argv
+    where = "resuming from the saved cursor" if resume else "from the top"
+    print(f"Backfilling bookmarks into {cfg.db_path} ({where}) ...")
+    n = run_backfill(client, cfg.db_path, resume=resume)
+    print(f"Done. {n} bookmarks fetched this run (stored in {cfg.db_path}).")
+    print("If X rate-limited mid-run, wait ~15 min and re-run with --resume to continue.")
     return 0
 
 
