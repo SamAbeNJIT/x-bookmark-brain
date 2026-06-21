@@ -96,15 +96,27 @@ def ui_search(q: str = "", con=Depends(get_db), ai=Depends(get_ai)):
     return page("Search", form + results)
 
 
+def _ask_form(question: str, autofocus: bool = True) -> str:
+    af = " autofocus" if autofocus else ""
+    return (
+        '<form method=post action="/ui/ask" class="narrow" id="askform">'
+        f'<input type=text name=question value="{esc(question)}" '
+        f'placeholder="Ask a question about your bookmarks…"{af}>'
+        '<div class=row style="margin-top:.5rem">'
+        '<button id="askbtn">Ask</button>'
+        '<span id="thinking" class="thinking" hidden>'
+        '<span class="spinner"></span> Thinking… retrieving posts &amp; writing an answer</span>'
+        "</div></form>"
+        "<script>var _f=document.getElementById('askform');"
+        "if(_f)_f.addEventListener('submit',function(){"
+        "var b=document.getElementById('askbtn');b.disabled=true;b.textContent='Thinking…';"
+        "var t=document.getElementById('thinking');if(t)t.hidden=false;});</script>"
+    )
+
+
 @ui_router.get("/ui/ask")
 def ui_ask(question: str = "", con=Depends(get_db), ai=Depends(get_ai)):
-    form = (
-        f'<form method=post action="/ui/ask" class="narrow">'
-        f'<input type=text name=question value="{esc(question)}" '
-        f'placeholder="Ask a question about your bookmarks…" autofocus>'
-        f'<div class=row style="margin-top:.5rem"><button>Ask</button></div></form>'
-    )
-    return page("Ask", form)
+    return page("Ask", _ask_form(question))
 
 
 @ui_router.post("/ui/ask")
@@ -112,11 +124,7 @@ def ui_ask_post(question: str = Form(...), con=Depends(get_db), ai=Depends(get_a
     result = ask(con, ai, question, 8)
     cited = {c for c in result["citations"]}
     cards = "".join(post_card(p) for p in result["retrieved"] if p["id"] in cited)
-    form = (
-        f'<form method=post action="/ui/ask" class="narrow">'
-        f'<input type=text name=question value="{esc(question)}"><div class=row '
-        f'style="margin-top:.5rem"><button>Ask</button></div></form>'
-    )
+    form = _ask_form(question, autofocus=False)
     answer = f'<div class="answer">{esc(result.get("answer") or "")}</div>'
     sources = f'<h3>Cited bookmarks</h3><div class="cards">{cards}</div>' if cards else ""
     return page("Ask", form + answer + sources)

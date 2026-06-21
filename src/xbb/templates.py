@@ -132,6 +132,12 @@ _STYLE = """
   button.ghost { background: var(--panel); color: var(--muted); border: 1px solid var(--line-2); }
   form { margin: .5rem 0; }
   .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+  .thinking { display: inline-flex; align-items: center; gap: .5rem; color: var(--muted);
+              font-size: .9rem; }
+  .spinner { width: 1.05rem; height: 1.05rem; border: 2px solid var(--line-2);
+             border-top-color: var(--accent); border-radius: 50%; display: inline-block;
+             animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
   /* answer */
   .answer { background: linear-gradient(180deg, #fbfbff, var(--panel)); border: 1px solid var(--line);
