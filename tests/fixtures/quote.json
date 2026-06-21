@@ -1,0 +1,27 @@
+{
+  "__typename": "Tweet",
+  "rest_id": "1003",
+  "core": {
+    "user_results": {
+      "result": {
+        "rest_id": "u_carol",
+        "legacy": { "screen_name": "carol", "name": "Carol" }
+      }
+    }
+  },
+  "legacy": {
+    "full_text": "Adding to this — the same applies to agents.",
+    "lang": "en",
+    "created_at": "Wed Jun 18 12:00:00 +0000 2025",
+    "favorite_count": 12,
+    "retweet_count": 1,
+    "entities": { "hashtags": [], "urls": [] }
+  },
+  "quoted_status_result": {
+    "result": {
+      "__typename": "Tweet",
+      "rest_id": "800",
+      "legacy": { "full_text": "The original take being quoted." }
+    }
+  }
+}
