@@ -119,10 +119,11 @@ _STYLE = """
   .post .meta { color: var(--muted); font-size: .8rem; margin-top: .65rem; }
 
   /* forms */
-  input[type=text], input[type=search] { width: 100%; padding: .8rem 1rem; font-size: 1.02rem;
-         border: 1px solid var(--line-2); border-radius: 12px; background: var(--panel);
-         box-shadow: var(--shadow); font-family: inherit; }
-  input:focus { outline: none; border-color: var(--accent);
+  input[type=text], input[type=search], textarea { width: 100%; padding: .8rem 1rem;
+         font-size: 1.02rem; border: 1px solid var(--line-2); border-radius: 12px;
+         background: var(--panel); box-shadow: var(--shadow); font-family: inherit; }
+  textarea { resize: vertical; min-height: 4.5rem; line-height: 1.5; display: block; }
+  input:focus, textarea:focus { outline: none; border-color: var(--accent);
                 box-shadow: 0 0 0 4px var(--accent-soft); }
   button { padding: .6rem 1.05rem; font-size: .92rem; font-weight: 600; border: 0;
            background: var(--accent); color: #fff; border-radius: 11px; cursor: pointer;

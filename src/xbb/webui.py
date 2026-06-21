@@ -99,18 +99,22 @@ def ui_search(q: str = "", con=Depends(get_db), ai=Depends(get_ai)):
 def _ask_form(question: str, autofocus: bool = True) -> str:
     af = " autofocus" if autofocus else ""
     return (
-        '<form method=post action="/ui/ask" class="narrow" id="askform">'
-        f'<input type=text name=question value="{esc(question)}" '
-        f'placeholder="Ask a question about your bookmarks…"{af}>'
-        '<div class=row style="margin-top:.5rem">'
+        '<form method=post action="/ui/ask" id="askform">'
+        f'<textarea name=question rows=3 '
+        f'placeholder="Ask a question about your bookmarks…"{af}>{esc(question)}</textarea>'
+        '<div class=row style="margin-top:.55rem">'
         '<button id="askbtn">Ask</button>'
+        '<span class=muted style="font-size:.82rem">⌘/Ctrl + Enter to send</span>'
         '<span id="thinking" class="thinking" hidden>'
         '<span class="spinner"></span> Thinking… retrieving posts &amp; writing an answer</span>'
         "</div></form>"
         "<script>var _f=document.getElementById('askform');"
-        "if(_f)_f.addEventListener('submit',function(){"
+        "if(_f){_f.addEventListener('submit',function(){"
         "var b=document.getElementById('askbtn');b.disabled=true;b.textContent='Thinking…';"
-        "var t=document.getElementById('thinking');if(t)t.hidden=false;});</script>"
+        "var t=document.getElementById('thinking');if(t)t.hidden=false;});"
+        "var _ta=_f.querySelector('textarea');"
+        "if(_ta)_ta.addEventListener('keydown',function(e){"
+        "if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){e.preventDefault();_f.requestSubmit();}});}</script>"
     )
 
 
