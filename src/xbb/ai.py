@@ -13,6 +13,7 @@ interface).
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Protocol
 
 
@@ -52,31 +53,44 @@ class BedrockAIClient:
     def _runtime(self):  # pragma: no cover
         import boto3
 
-        return boto3.client("bedrock-runtime", region_name=self.region)
+        if getattr(self, "_rt", None) is None:
+            self._rt = boto3.client("bedrock-runtime", region_name=self.region)
+        return self._rt
+
+    def _invoke(self, model_id: str, body: dict[str, Any]) -> dict[str, Any]:  # pragma: no cover
+        """invoke_model with exponential backoff on Bedrock throttling/transient errors."""
+        from botocore.exceptions import ClientError
+
+        runtime = self._runtime()
+        delay = 1.0
+        for _ in range(7):
+            try:
+                resp = runtime.invoke_model(modelId=model_id, body=json.dumps(body))
+                return json.loads(resp["body"].read())
+            except ClientError as e:
+                code = e.response.get("Error", {}).get("Code", "")
+                if code in {"ThrottlingException", "TooManyRequestsException",
+                            "ServiceUnavailableException", "ModelTimeoutException"}:
+                    time.sleep(delay)
+                    delay = min(delay * 2, 30)
+                    continue
+                raise
+        raise RuntimeError("Bedrock throttling: retries exhausted")
 
     def embed(self, texts: list[str]) -> list[list[float]]:  # pragma: no cover
-        runtime = self._runtime()
-        vectors: list[list[float]] = []
-        for text in texts:
-            # Amazon Titan Text Embeddings request/response shape.
-            resp = runtime.invoke_model(
-                modelId=self.embedding_model,
-                body=json.dumps({"inputText": text}),
-            )
-            payload = json.loads(resp["body"].read())
-            vectors.append(payload["embedding"])
-        return vectors
+        # Amazon Titan Text Embeddings: one inputText per call (no batch endpoint).
+        return [self._invoke(self.embedding_model, {"inputText": t})["embedding"] for t in texts]
 
     def _invoke_claude(self, model: str, system: str, user: str, max_tokens: int = 2048) -> str:  # pragma: no cover
-        runtime = self._runtime()
-        body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": max_tokens,
-            "system": system,
-            "messages": [{"role": "user", "content": user}],
-        }
-        resp = runtime.invoke_model(modelId=model, body=json.dumps(body))
-        payload = json.loads(resp["body"].read())
+        payload = self._invoke(
+            model,
+            {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": max_tokens,
+                "system": system,
+                "messages": [{"role": "user", "content": user}],
+            },
+        )
         return payload["content"][0]["text"]
 
     def derive_taxonomy(self, samples: list[str]) -> list[dict[str, str]]:  # pragma: no cover

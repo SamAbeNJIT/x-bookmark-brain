@@ -12,6 +12,7 @@ dependencies = [
     "pydantic",
     "python-dotenv",
     "python-multipart",  # HTML form posts for the web UI
+    "numpy",          # in-memory cosine search over stored embeddings
     # vector index — pick during the search slice (e.g. sqlite-vec or lancedb)
 ]
 
