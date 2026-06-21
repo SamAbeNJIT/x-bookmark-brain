@@ -7,7 +7,7 @@ delete), then used to multi-label posts. All AI calls go through the `AIClient` 
 from __future__ import annotations
 
 import sqlite3
-from typing import Any
+from typing import Any, Callable
 
 from .ai import AIClient
 
@@ -84,8 +84,16 @@ def assign_post(con: sqlite3.Connection, ai: AIClient, post_id: str) -> list[str
     return applied
 
 
-def assign_unassigned(con: sqlite3.Connection, ai: AIClient) -> int:
-    """Label every post that has no assignment yet. Returns how many were processed."""
+def assign_unassigned(
+    con: sqlite3.Connection,
+    ai: AIClient,
+    progress: Callable[[int, int], None] | None = None,
+) -> int:
+    """Label every post that has no assignment yet. Returns how many were processed.
+
+    Resumable: only posts without an assignment are processed, and each is committed as it
+    goes (via assign_post), so re-running continues where an interrupted run left off.
+    """
     rows = con.execute(
         """
         SELECT p.id FROM posts p
@@ -93,9 +101,12 @@ def assign_unassigned(con: sqlite3.Connection, ai: AIClient) -> int:
         WHERE a.post_id IS NULL AND p.text IS NOT NULL
         """
     ).fetchall()
-    for (post_id,) in rows:
+    total = len(rows)
+    for i, (post_id,) in enumerate(rows, 1):
         assign_post(con, ai, post_id)
-    return len(rows)
+        if progress is not None:
+            progress(i, total)
+    return total
 
 
 def categories_with_counts(con: sqlite3.Connection) -> list[dict[str, Any]]:

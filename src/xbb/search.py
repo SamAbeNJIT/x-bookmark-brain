@@ -1,55 +1,67 @@
-"""Semantic search (issue #4): embed posts, store vectors, rank by cosine similarity.
+"""Semantic search (#4): embed posts (batched, resumable) and rank with numpy cosine.
 
-Vectors are stored as JSON in the `embeddings` table and compared with a pure-Python
-cosine — zero extra dependencies, fine for a personal corpus. Swapping in an ANN index
-(sqlite-vec / LanceDB) later only touches this module.
+Vectors are stored as float32 bytes in the `embeddings` table; search loads them into a
+numpy matrix and ranks by cosine in a single matrix-vector product — exact and instant for
+a personal corpus (tens to hundreds of thousands of vectors). Swapping to sqlite-vec/FAISS
+later only touches this module.
 """
 
 from __future__ import annotations
 
-import json
-import math
 import sqlite3
-from typing import Any
+from typing import Any, Callable
+
+import numpy as np
 
 from .ai import AIClient
 
 
-def _cosine(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
-    if na == 0 or nb == 0:
-        return 0.0
-    return dot / (na * nb)
+def _to_bytes(vector) -> bytes:
+    return np.asarray(vector, dtype=np.float32).tobytes()
 
 
-def index_posts(con: sqlite3.Connection, ai: AIClient) -> int:
-    """Embed posts that don't yet have an embedding. Returns how many were newly indexed."""
-    rows = con.execute(
+def _unindexed(con: sqlite3.Connection) -> list[tuple[str, str]]:
+    return con.execute(
         """
         SELECT p.id, p.text
         FROM posts p
         LEFT JOIN embeddings e ON e.post_id = p.id
-        WHERE e.post_id IS NULL AND p.text IS NOT NULL
+        WHERE e.post_id IS NULL AND p.text IS NOT NULL AND p.text <> ''
         """
     ).fetchall()
-    if not rows:
-        return 0
-    vectors = ai.embed([text for _, text in rows])
-    for (post_id, _), vector in zip(rows, vectors):
-        con.execute(
+
+
+def index_posts(
+    con: sqlite3.Connection,
+    ai: AIClient,
+    batch_size: int = 100,
+    progress: Callable[[int, int], None] | None = None,
+) -> int:
+    """Embed posts that don't yet have an embedding, in batches.
+
+    Resumable and interrupt-safe: only un-embedded posts are processed, and each batch is
+    committed before the next, so a crash or Ctrl-C loses at most one batch's work. Returns
+    the number newly embedded.
+    """
+    rows = _unindexed(con)
+    total = len(rows)
+    done = 0
+    for start in range(0, total, batch_size):
+        chunk = rows[start : start + batch_size]
+        vectors = ai.embed([text for _, text in chunk])
+        con.executemany(
             "INSERT INTO embeddings (post_id, vector) VALUES (?, ?) "
             "ON CONFLICT(post_id) DO UPDATE SET vector = excluded.vector",
-            (post_id, json.dumps(vector)),
+            [(post_id, _to_bytes(vec)) for (post_id, _), vec in zip(chunk, vectors)],
         )
-    con.commit()
-    return len(rows)
+        con.commit()
+        done += len(chunk)
+        if progress is not None:
+            progress(done, total)
+    return done
 
 
-def search(con: sqlite3.Connection, ai: AIClient, query: str, k: int = 10) -> list[dict[str, Any]]:
-    """Return up to k posts ranked by semantic similarity to the query."""
-    query_vector = ai.embed([query])[0]
+def _load_matrix(con: sqlite3.Connection):
     rows = con.execute(
         """
         SELECT p.id, p.url, p.text, a.handle, e.vector
@@ -58,15 +70,22 @@ def search(con: sqlite3.Connection, ai: AIClient, query: str, k: int = 10) -> li
         LEFT JOIN authors a ON a.id = p.author_id
         """
     ).fetchall()
-    scored = [
-        {
-            "id": post_id,
-            "url": url,
-            "text": text,
-            "handle": handle,
-            "score": _cosine(query_vector, json.loads(vector)),
-        }
-        for post_id, url, text, handle, vector in rows
-    ]
-    scored.sort(key=lambda r: r["score"], reverse=True)
-    return scored[:k]
+    if not rows:
+        return [], None
+    meta = [{"id": r[0], "url": r[1], "text": r[2], "handle": r[3]} for r in rows]
+    matrix = np.stack([np.frombuffer(r[4], dtype=np.float32) for r in rows])
+    return meta, matrix
+
+
+def search(con: sqlite3.Connection, ai: AIClient, query: str, k: int = 10) -> list[dict[str, Any]]:
+    """Return up to k posts ranked by cosine similarity to the query (exact, numpy)."""
+    meta, matrix = _load_matrix(con)
+    if not meta:
+        return []
+    q = np.asarray(ai.embed([query])[0], dtype=np.float32)
+    denom = np.linalg.norm(matrix, axis=1) * (float(np.linalg.norm(q)) or 1e-9)
+    denom[denom == 0] = 1e-9
+    scores = (matrix @ q) / denom
+    k = min(k, len(meta))
+    top = np.argsort(-scores)[:k]
+    return [{**meta[i], "score": float(scores[i])} for i in top]
