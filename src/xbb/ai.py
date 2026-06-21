@@ -142,4 +142,13 @@ class BedrockAIClient:
             "use by their id. Reply with ONLY JSON: {\"answer\": str, \"citations\": [post_id]}."
         )
         user = f"Question: {question}\n\nPosts:\n{json.dumps(retrieved)}"
-        return _extract_json(self._invoke_claude(self.reasoning_model, system, user))
+        raw = self._invoke_claude(self.reasoning_model, system, user)
+        try:
+            result = _extract_json(raw)
+        except ValueError:
+            result = None
+        if not isinstance(result, dict):
+            # Model answered in prose, not JSON — still show the text, just without citations.
+            return {"answer": raw.strip(), "citations": []}
+        result.setdefault("citations", [])
+        return result

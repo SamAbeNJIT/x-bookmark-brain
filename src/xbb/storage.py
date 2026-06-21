@@ -67,6 +67,7 @@ def connect(db_path: str) -> sqlite3.Connection:
     """Open a connection with foreign keys enabled."""
     con = sqlite3.connect(db_path)
     con.execute("PRAGMA foreign_keys = ON")
+    con.execute("PRAGMA journal_mode = WAL")     # readers don't block the refill writer
     con.execute("PRAGMA busy_timeout = 5000")  # wait, don't error, if a refill is writing
     return con
 

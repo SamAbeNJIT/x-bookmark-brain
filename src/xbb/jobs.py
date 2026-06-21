@@ -42,6 +42,7 @@ def _run(cfg: Config) -> None:
     from .search import index_posts
     from .storage import connect, init_db
 
+    con = None
     try:
         init_db(cfg.db_path)
         con = connect(cfg.db_path)
@@ -73,11 +74,12 @@ def _run(cfg: Config) -> None:
         categorize.apply_default_parents(con)
         categorize.assign_unassigned(con, ai, progress=lambda d, t: _set(detail=f"labeling {d}/{t}"))
 
-        con.close()
         _set(step="done", detail=f"up to date — {added} new bookmark(s) added")
     except Exception as e:  # surface any failure to the UI instead of dying silently
         _set(step="error", error=f"{type(e).__name__}: {e}")
     finally:
+        if con is not None:
+            con.close()
         with _lock:
             _status["running"] = False
             _status["finished_at"] = time.time()
