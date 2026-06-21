@@ -67,11 +67,38 @@ class BedrockAIClient:
             vectors.append(payload["embedding"])
         return vectors
 
+    def _invoke_claude(self, model: str, system: str, user: str, max_tokens: int = 2048) -> str:  # pragma: no cover
+        runtime = self._runtime()
+        body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": max_tokens,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        }
+        resp = runtime.invoke_model(modelId=model, body=json.dumps(body))
+        payload = json.loads(resp["body"].read())
+        return payload["content"][0]["text"]
+
     def derive_taxonomy(self, samples: list[str]) -> list[dict[str, str]]:  # pragma: no cover
-        raise NotImplementedError("taxonomy derivation slice (#5)")
+        system = (
+            "You organize a user's saved X posts. Propose 10-25 categories that cover the "
+            "sample. Reply with ONLY a JSON array of {\"name\", \"definition\"} objects."
+        )
+        user = "Sample posts:\n" + "\n---\n".join(samples)
+        return json.loads(self._invoke_claude(self.reasoning_model, system, user))
 
     def assign_categories(self, text: str, taxonomy: list[dict[str, str]]) -> list[str]:  # pragma: no cover
-        raise NotImplementedError("assignment slice (#6)")
+        system = (
+            "Assign the post to one or more of the given categories. Reply with ONLY a JSON "
+            "array of category names, chosen strictly from the provided taxonomy."
+        )
+        user = f"Taxonomy: {json.dumps(taxonomy)}\n\nPost:\n{text}"
+        return json.loads(self._invoke_claude(self.labeling_model, system, user))
 
     def answer(self, question: str, retrieved: list[dict[str, Any]]) -> dict[str, Any]:  # pragma: no cover
-        raise NotImplementedError("ask slice (#7)")
+        system = (
+            "Answer the question using ONLY the provided saved posts. Cite the posts you "
+            "use by their id. Reply with ONLY JSON: {\"answer\": str, \"citations\": [post_id]}."
+        )
+        user = f"Question: {question}\n\nPosts:\n{json.dumps(retrieved)}"
+        return json.loads(self._invoke_claude(self.reasoning_model, system, user))
