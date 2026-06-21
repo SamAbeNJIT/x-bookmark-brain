@@ -24,3 +24,7 @@ def create_app():  # pragma: no cover - scaffold
     # TODO routes: GET /search, POST /ask, GET /categories, GET /categories/{id},
     #              taxonomy review (GET/POST /taxonomy)
     return app
+
+
+# Module-level app so `uvicorn xbb.web:app` works as documented in the README.
+app = create_app()
