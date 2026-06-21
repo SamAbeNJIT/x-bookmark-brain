@@ -58,9 +58,11 @@ _STYLE = """
   .wrap { max-width: 1320px; margin: 0 auto; }
   /* reading-width blocks stay comfortable even on huge screens */
   .narrow { max-width: 720px; }
-  /* card lists flow into as many ~340px columns as the screen allows */
-  .cards { display: grid; gap: .85rem; align-items: start;
-           grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
+  /* card lists: masonry-style columns so short cards don't leave gaps —
+     the next card in the column snaps up instead of waiting for a new row */
+  .cards { columns: 340px; column-gap: .85rem; }
+  .cards > .post { break-inside: avoid; -webkit-column-break-inside: avoid;
+                   margin: 0 0 .85rem; }
   h1 { font-family: var(--display); font-size: 1.7rem; font-weight: 700; letter-spacing: -.025em;
        margin: 0 0 1.1rem; }
   h3 { font-family: var(--display); margin: 1.4rem 0 .5rem; font-size: 1.02rem; font-weight: 600; }
