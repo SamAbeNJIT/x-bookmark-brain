@@ -4,10 +4,6 @@ A personal, single-user, locally-run web app that backfills your entire **X (Twi
 bookmark history**, auto-categorizes it, and lets you find anything via semantic search or
 an AI "ask" mode that cites the saved posts.
 
-> ⚠️ This repository was repurposed from a previous project. The old code remains in git
-> history (and on the `master` branch until replaced). The active project is defined by
-> [`docs/PRD.md`](docs/PRD.md).
-
 ## What it does (MVP)
 
 - **Backfill** your full X bookmark history into a local database, in one shot, using your
