@@ -89,11 +89,11 @@ _STYLE = """
   .wrap { max-width: 1320px; margin: 0 auto; }
   /* reading-width blocks stay comfortable even on huge screens */
   .narrow { max-width: 720px; }
-  /* card lists: masonry-style columns so short cards don't leave gaps —
-     the next card in the column snaps up instead of waiting for a new row */
-  .cards { columns: 340px; column-gap: .85rem; }
-  .cards > .post { break-inside: avoid; -webkit-column-break-inside: avoid;
-                   margin: 0 0 .85rem; }
+  /* card lists: JS distributes cards into the shortest column in order, so they read
+     newest-first left-to-right across the top row AND pack with no gaps (masonry). */
+  .cards { display: flex; align-items: flex-start; gap: .85rem; flex-wrap: wrap; }
+  .masonry-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: .85rem; }
+  .cards > .post { flex: 1 1 320px; margin: 0; }  /* brief pre-JS fallback before columns form */
   h1 { font-family: var(--display); font-size: 1.7rem; font-weight: 700; letter-spacing: -.025em;
        margin: 0 0 1.1rem; }
   h3 { font-family: var(--display); margin: 1.4rem 0 .5rem; font-size: 1.02rem; font-weight: 600; }
@@ -234,6 +234,27 @@ _ACTIVE_JS = (
     "if(h===p||(h!=='/'&&p.indexOf(h)===0))a.classList.add('active');});</script>"
 )
 
+# Row-major masonry: distribute cards (in DOM/chronological order) into the shortest column,
+# so the top row is the newest items left-to-right and columns pack with no gaps. Exposes
+# window.__masonryAdd(container, html) for the feed's infinite scroll to append more.
+_MASONRY_JS = (
+    "<script>(function(){"
+    "function nCols(c){var w=c.clientWidth||c.offsetWidth||0;return Math.max(1,Math.floor((w+14)/354));}"
+    "function shortest(c){var k=c.querySelectorAll('.masonry-col'),m=k[0];"
+    "for(var i=1;i<k.length;i++){if(k[i].offsetHeight<m.offsetHeight)m=k[i];}return m;}"
+    "function build(c){var want=nCols(c);"
+    "var cards=Array.prototype.slice.call(c.querySelectorAll('.post'));"
+    "c.innerHTML='';for(var i=0;i<want;i++){var d=document.createElement('div');d.className='masonry-col';c.appendChild(d);}"
+    "cards.forEach(function(card){shortest(c).appendChild(card);});}"
+    "function layout(){document.querySelectorAll('.cards').forEach(build);}"
+    "window.__masonryAdd=function(c,html){if(!c.querySelector('.masonry-col'))build(c);"
+    "var t=document.createElement('div');t.innerHTML=html;"
+    "Array.prototype.slice.call(t.querySelectorAll('.post')).forEach(function(card){shortest(c).appendChild(card);});};"
+    "layout();window.addEventListener('load',layout);"
+    "var tid;window.addEventListener('resize',function(){clearTimeout(tid);tid=setTimeout(layout,150);});"
+    "})();</script>"
+)
+
 
 def esc(value: Any) -> str:
     return html.escape(str(value)) if value is not None else ""
@@ -245,7 +266,7 @@ def page(title: str, body: str) -> HTMLResponse:
         "<meta name=viewport content='width=device-width, initial-scale=1'>"
         f"<title>{esc(title)} · bookmark-brain</title>{_HEAD}{_STYLE}</head>"
         f"<body>{_SIDEBAR}<main class=\"content\"><div class=\"wrap\">"
-        f"<h1>{esc(title)}</h1>{body}</div></main>{_ACTIVE_JS}</body></html>"
+        f"<h1>{esc(title)}</h1>{body}</div></main>{_ACTIVE_JS}{_MASONRY_JS}</body></html>"
     )
 
 

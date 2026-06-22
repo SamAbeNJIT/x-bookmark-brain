@@ -201,7 +201,8 @@ def ui_feed(parent: str = "", offset: int = 0, partial: int = 0, con=Depends(get
         "fetch(u).then(function(r){return r.text();}).then(function(h){"
         "var n=(h.match(/class=\"post\"/g)||[]).length;"
         "if(n===0){done=true;more.remove();return;}"
-        "feed.insertAdjacentHTML('beforeend',h);off+=" + str(_PAGE) + ";busy=false;"
+        "if(window.__masonryAdd){window.__masonryAdd(feed,h);}else{feed.insertAdjacentHTML('beforeend',h);}"
+        "off+=" + str(_PAGE) + ";busy=false;"
         "if(n<" + str(_PAGE) + "){done=true;more.remove();}"
         "});});io.observe(more);})();</script>"
     )
