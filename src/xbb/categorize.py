@@ -215,7 +215,7 @@ def posts_in_category(con: sqlite3.Connection, category_id: int) -> list[dict[st
             JOIN assignments a ON a.post_id = p.id
             LEFT JOIN authors au ON au.id = p.author_id
             WHERE a.category_id = ?
-            ORDER BY p.bookmarked_at
+            ORDER BY p.bm_rank DESC
             """,
             (category_id,),
         )
@@ -240,12 +240,12 @@ def feed_posts(
     """
     if parent:
         rows = con.execute(
-            cols + " WHERE c.parent = ? GROUP BY p.id ORDER BY p.rowid LIMIT ? OFFSET ?",
+            cols + " WHERE c.parent = ? GROUP BY p.id ORDER BY p.bm_rank DESC LIMIT ? OFFSET ?",
             (parent, limit, offset),
         )
     else:
         rows = con.execute(
-            cols + " GROUP BY p.id ORDER BY p.rowid LIMIT ? OFFSET ?", (limit, offset)
+            cols + " GROUP BY p.id ORDER BY p.bm_rank DESC LIMIT ? OFFSET ?", (limit, offset)
         )
     return [
         {"id": r[0], "url": r[1], "text": r[2], "handle": r[3],

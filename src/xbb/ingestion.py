@@ -414,6 +414,7 @@ def run_backfill(
     if resume and hasattr(client, "start_cursor"):
         client.start_cursor = storage.get_sync_cursor(con)  # None → start from the top
     count = 0
+    new_ids: list[str] = []  # newly-inserted post ids, in fetch (newest-first) order
     try:
         for page in client.iter_bookmark_pages():
             new_in_page = 0
@@ -427,12 +428,24 @@ def run_backfill(
                 count += 1
                 if not exists:
                     new_in_page += 1
+                    new_ids.append(rec["id"])
             con.commit()
             if tracks_cursor:
                 storage.set_sync_cursor(con, getattr(client, "cursor"))  # kill-safe checkpoint
             if incremental and new_in_page == 0:
                 break  # caught up to already-synced bookmarks
     finally:
+        # Assign bookmark-recency ranks above everything already stored, so the newest saves
+        # sort first regardless of insert (rowid) order. new_ids is newest-first; assign so
+        # the newest gets the highest rank.
+        if new_ids:
+            base = con.execute("SELECT COALESCE(MAX(bm_rank), 0) FROM posts").fetchone()[0]
+            for i, pid in enumerate(reversed(new_ids)):  # oldest-of-batch first
+                con.execute(
+                    "UPDATE posts SET bm_rank = ? WHERE id = ? AND bm_rank IS NULL",
+                    (base + 1 + i, pid),
+                )
+            con.commit()
         if tracks_cursor:
             storage.set_sync_cursor(con, getattr(client, "cursor", None))
         con.close()

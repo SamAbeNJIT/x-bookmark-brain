@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS posts (
     links_json     TEXT,
     like_count     INTEGER,
     repost_count   INTEGER,
-    raw_json       TEXT                -- original X payload, retained verbatim
+    raw_json       TEXT,               -- original X payload, retained verbatim
+    bm_rank        INTEGER             -- bookmark-recency rank; higher = more recently saved
 );
 
 CREATE TABLE IF NOT EXISTS self_thread_posts (
@@ -92,6 +93,9 @@ def init_db(db_path: str) -> None:
         author_cols = [r[1] for r in con.execute("PRAGMA table_info(authors)")]
         if "avatar_url" not in author_cols:
             con.execute("ALTER TABLE authors ADD COLUMN avatar_url TEXT")
+        post_cols = [r[1] for r in con.execute("PRAGMA table_info(posts)")]
+        if "bm_rank" not in post_cols:
+            con.execute("ALTER TABLE posts ADD COLUMN bm_rank INTEGER")
         con.commit()
     finally:
         con.close()
