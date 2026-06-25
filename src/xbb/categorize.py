@@ -92,29 +92,48 @@ def assign_unassigned(
     con: sqlite3.Connection,
     ai: AIClient,
     progress: Callable[[int, int], None] | None = None,
+    batch_size: int = 20,
 ) -> int:
     """Label every post that has no assignment yet. Returns how many were processed.
 
-    Resumable: only posts without an assignment are processed, and each is committed as it
-    goes (via assign_post), so re-running continues where an interrupted run left off.
+    Labels in batches — many posts per AI call — so the taxonomy (most of the input) is sent
+    once per batch instead of once per post (big cost/latency win at ~1k posts/sync). Resumable
+    and interrupt-safe: only un-assigned posts are selected, and each batch commits before the
+    next, so a re-run continues where an interrupted run left off.
     """
     rows = con.execute(
         """
-        SELECT p.id FROM posts p
+        SELECT p.id, p.text FROM posts p
         LEFT JOIN assignments a ON a.post_id = p.id
         WHERE a.post_id IS NULL AND p.text IS NOT NULL
         """
     ).fetchall()
     total = len(rows)
+    if not total:
+        return 0
+    taxonomy = get_taxonomy(con)
+    name_to_id = {c["name"]: c["id"] for c in taxonomy}
     processed = 0
-    for i, (post_id,) in enumerate(rows, 1):
+    for start in range(0, total, batch_size):
+        chunk = rows[start : start + batch_size]
         try:
-            assign_post(con, ai, post_id)
-            processed += 1
+            labels = ai.assign_categories_batch(
+                [{"id": pid, "text": txt} for pid, txt in chunk], taxonomy
+            )
         except Exception:
-            pass  # never let one bad post abort the batch; a re-run retries it
+            labels = [[] for _ in chunk]
+        for (post_id, _txt), names in zip(chunk, labels):
+            for name in names:
+                category_id = name_to_id.get(name)
+                if category_id is not None:
+                    con.execute(
+                        "INSERT OR IGNORE INTO assignments (post_id, category_id) VALUES (?, ?)",
+                        (post_id, category_id),
+                    )
+            processed += 1
+        con.commit()
         if progress is not None:
-            progress(i, total)
+            progress(min(start + batch_size, total), total)
     return processed
 
 

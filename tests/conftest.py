@@ -39,6 +39,9 @@ class FakeAI:
         names = [c["name"] for c in taxonomy if c["name"].lower() in tl]
         return names or [taxonomy[0]["name"]]
 
+    def assign_categories_batch(self, posts, taxonomy):
+        return [self.assign_categories(p["text"], taxonomy) for p in posts]
+
     def answer(self, question, retrieved):
         ids = [r["id"] for r in retrieved]
         # Deliberately include a non-retrieved id to prove citation filtering.

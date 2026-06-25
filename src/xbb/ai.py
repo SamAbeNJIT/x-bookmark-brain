@@ -53,6 +53,12 @@ class AIClient(Protocol):
         """Multi-label a post against the approved taxonomy."""
         ...
 
+    def assign_categories_batch(
+        self, posts: list[dict[str, Any]], taxonomy: list[dict[str, str]]
+    ) -> list[list[str]]:
+        """Multi-label several posts in one call. Returns labels aligned to `posts` order."""
+        ...
+
     def answer(self, question: str, retrieved: list[dict[str, Any]]) -> dict[str, Any]:
         """Synthesize an answer with citations from retrieved bookmarks."""
         ...
@@ -135,6 +141,33 @@ class BedrockAIClient:
         except ValueError:
             return []  # e.g. a URL-only post → model replies in prose, not JSON; no labels
         return [c for c in result if isinstance(c, str)] if isinstance(result, list) else []
+
+    def assign_categories_batch(  # pragma: no cover
+        self, posts: list[dict[str, Any]], taxonomy: list[dict[str, str]]
+    ) -> list[list[str]]:
+        # Label many posts in ONE Claude call to cut cost/latency: the taxonomy (the bulk of
+        # the input) is sent once per batch instead of once per post.
+        if not posts:
+            return []
+        lines = []
+        for i, p in enumerate(posts, 1):
+            text = (p.get("text") or "").replace("\n", " ").strip()[:500]
+            lines.append(f"[{i}] {text}")
+        system = (
+            "Multi-label each numbered post against the taxonomy. Reply with ONLY a JSON "
+            "object mapping each post number (as a string) to an array of category names "
+            "chosen strictly from the taxonomy. Include every number; use [] if none fit."
+        )
+        user = f"Taxonomy: {json.dumps(taxonomy)}\n\nPosts:\n" + "\n".join(lines)
+        try:
+            result = _extract_json(self._invoke_claude(self.labeling_model, system, user, max_tokens=4096))
+        except ValueError:
+            return [[] for _ in posts]
+        out: list[list[str]] = []
+        for i in range(1, len(posts) + 1):
+            v = result.get(str(i)) if isinstance(result, dict) else None
+            out.append([c for c in v if isinstance(c, str)] if isinstance(v, list) else [])
+        return out
 
     def answer(self, question: str, retrieved: list[dict[str, Any]]) -> dict[str, Any]:  # pragma: no cover
         system = (
