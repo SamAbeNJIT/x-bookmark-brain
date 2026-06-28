@@ -166,6 +166,14 @@ def ui_categories(con=Depends(get_db)):
     body = '<p class=lead>Each topic has a color. Tap one to see just those tweets, or expand a group below.</p>'
     body += legend(groups)
     body += f'<div class="tree">{"".join(blocks)}</div>'
+    n_unlabeled = categorize.unlabeled_count(con)
+    if n_unlabeled:
+        body += (
+            '<div class="tree"><a class="child" href="/ui/unlabeled" '
+            'style="margin-left:0;border-left-color:#9aa0ab">'
+            '<span class="grow">Unlabeled</span>'
+            f'<span class="badge">{n_unlabeled:,}</span></a></div>'
+        )
     return page("Categories", body)
 
 
@@ -218,6 +226,23 @@ def ui_category(category_id: int, con=Depends(get_db)):
         else "<p class=muted>No posts.</p>"
     )
     return page("Category", cards)
+
+
+@ui_router.get("/ui/unlabeled")
+def ui_unlabeled(con=Depends(get_db)):
+    posts = categorize.posts_unlabeled(con)
+    total = categorize.unlabeled_count(con)
+    shown = f"first {len(posts):,} of {total:,}" if total > len(posts) else f"{total:,}"
+    note = (
+        f"<p class=lead>{shown} posts with no category — a mix of image-only / bare-link "
+        "bookmarks (no text to work with) and ones the labeler skipped. Newest first.</p>"
+    )
+    cards = (
+        f'<div class="cards">{"".join(post_card(p) for p in posts)}</div>'
+        if posts
+        else "<p class=muted>Nothing unlabeled.</p>"
+    )
+    return page("Unlabeled", note + cards)
 
 
 @ui_router.get("/ui/taxonomy")

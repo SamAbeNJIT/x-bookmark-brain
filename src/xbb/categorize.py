@@ -241,6 +241,34 @@ def posts_in_category(con: sqlite3.Connection, category_id: int) -> list[dict[st
     ]
 
 
+def unlabeled_count(con: sqlite3.Connection) -> int:
+    """How many posts have no category assignment at all."""
+    return con.execute(
+        "SELECT COUNT(*) FROM posts p LEFT JOIN assignments a ON a.post_id = p.id "
+        "WHERE a.post_id IS NULL"
+    ).fetchone()[0]
+
+
+def posts_unlabeled(con: sqlite3.Connection, limit: int = 600) -> list[dict[str, Any]]:
+    """Posts with no category assignment, newest-saved first — the 'Unlabeled' bucket."""
+    return [
+        {"id": r[0], "url": r[1], "text": r[2], "handle": r[3],
+         "avatar_url": r[4], "media_json": r[5], "parent": None}
+        for r in con.execute(
+            """
+            SELECT p.id, p.url, p.text, au.handle, au.avatar_url, p.media_json
+            FROM posts p
+            LEFT JOIN assignments a ON a.post_id = p.id
+            LEFT JOIN authors au ON au.id = p.author_id
+            WHERE a.post_id IS NULL
+            ORDER BY p.bm_rank DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+    ]
+
+
 def feed_posts(
     con: sqlite3.Connection, parent: str | None = None, limit: int = 150, offset: int = 0
 ) -> list[dict[str, Any]]:
