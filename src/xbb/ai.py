@@ -18,6 +18,12 @@ import time
 from typing import Any, Protocol
 
 
+def _tax_names(taxonomy: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Taxonomy with only name + definition (drop the numeric id) so the labeler answers
+    with category names, not ids — and to trim input tokens."""
+    return [{"name": c["name"], "definition": c.get("definition")} for c in taxonomy]
+
+
 def _extract_json(text: str) -> Any:
     """Parse JSON from a model reply that may include prose or ```json fences.
 
@@ -135,7 +141,7 @@ class BedrockAIClient:
             "Assign the post to one or more of the given categories. Reply with ONLY a JSON "
             "array of category names, chosen strictly from the provided taxonomy."
         )
-        user = f"Taxonomy: {json.dumps(taxonomy)}\n\nPost:\n{text}"
+        user = f"Taxonomy: {json.dumps(_tax_names(taxonomy))}\n\nPost:\n{text}"
         try:
             result = _extract_json(self._invoke_claude(self.labeling_model, system, user))
         except ValueError:
@@ -158,7 +164,7 @@ class BedrockAIClient:
             "object mapping each post number (as a string) to an array of category names "
             "chosen strictly from the taxonomy. Include every number; use [] if none fit."
         )
-        user = f"Taxonomy: {json.dumps(taxonomy)}\n\nPosts:\n" + "\n".join(lines)
+        user = f"Taxonomy: {json.dumps(_tax_names(taxonomy))}\n\nPosts:\n" + "\n".join(lines)
         try:
             result = _extract_json(self._invoke_claude(self.labeling_model, system, user, max_tokens=4096))
         except ValueError:
