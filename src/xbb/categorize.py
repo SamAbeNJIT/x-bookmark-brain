@@ -68,6 +68,15 @@ def merge_categories(con: sqlite3.Connection, source_id: int, target_id: int) ->
 
 # --- #6: multi-label assignment + browse ----------------------------------------------
 
+def _labelable(text: str | None) -> bool:
+    """Heuristic: does this post have enough real text to be worth a single-post retry?
+    Filters out image-only / bare-link posts (which always come back empty)."""
+    if not text:
+        return False
+    t = text.strip()
+    return len(t) >= 40 and t.count(" ") >= 2
+
+
 def assign_post(con: sqlite3.Connection, ai: AIClient, post_id: str) -> list[str]:
     """Assign one post to one or more existing categories. Returns the applied names."""
     row = con.execute("SELECT text FROM posts WHERE id = ?", (post_id,)).fetchone()
@@ -100,6 +109,10 @@ def assign_unassigned(
     once per batch instead of once per post (big cost/latency win at ~1k posts/sync). Resumable
     and interrupt-safe: only un-assigned posts are selected, and each batch commits before the
     next, so a re-run continues where an interrupted run left off.
+
+    Self-heal: the batch path occasionally returns nothing for a post that does have real text;
+    such posts get one single-post retry (which is more thorough). Posts with no meaningful text
+    (image-only / bare links) are NOT retried — they'd just come back empty and waste a call.
     """
     rows = con.execute(
         """
@@ -113,6 +126,16 @@ def assign_unassigned(
         return 0
     taxonomy = get_taxonomy(con)
     name_to_id = {c["name"]: c["id"] for c in taxonomy}
+
+    def _write(post_id: str, names: list[str]) -> None:
+        for name in names:
+            category_id = name_to_id.get(name)
+            if category_id is not None:
+                con.execute(
+                    "INSERT OR IGNORE INTO assignments (post_id, category_id) VALUES (?, ?)",
+                    (post_id, category_id),
+                )
+
     processed = 0
     for start in range(0, total, batch_size):
         chunk = rows[start : start + batch_size]
@@ -122,14 +145,13 @@ def assign_unassigned(
             )
         except Exception:
             labels = [[] for _ in chunk]
-        for (post_id, _txt), names in zip(chunk, labels):
-            for name in names:
-                category_id = name_to_id.get(name)
-                if category_id is not None:
-                    con.execute(
-                        "INSERT OR IGNORE INTO assignments (post_id, category_id) VALUES (?, ?)",
-                        (post_id, category_id),
-                    )
+        for (post_id, text), names in zip(chunk, labels):
+            if not names and _labelable(text):  # batch dropped a real post — retry once
+                try:
+                    names = ai.assign_categories(text, taxonomy)
+                except Exception:
+                    names = []
+            _write(post_id, names)
             processed += 1
         con.commit()
         if progress is not None:
