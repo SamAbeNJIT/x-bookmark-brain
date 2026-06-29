@@ -153,6 +153,8 @@ _STYLE = """
           padding: .85rem 1.1rem; box-shadow: var(--shadow); min-width: 7rem; }
   .stat b { font-family: var(--display); font-size: 1.5rem; display: block; letter-spacing: -.02em; }
   .stat span { font-size: .82rem; color: var(--muted); }
+  a.stat { color: var(--ink); transition: border-color .14s, transform .14s; }
+  a.stat:hover { border-color: var(--accent); transform: translateY(-1px); text-decoration: none; }
   .badge { display: inline-block; min-width: 1.4rem; text-align: center; font-size: .76rem;
            font-weight: 600; color: var(--muted); background: #efece4; border-radius: 999px;
            padding: .14rem .55rem; }

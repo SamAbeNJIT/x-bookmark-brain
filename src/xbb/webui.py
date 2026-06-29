@@ -24,13 +24,22 @@ ui_router = APIRouter()
 def home(con=Depends(get_db)):
     posts = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
     cats = con.execute("SELECT COUNT(*) FROM categories").fetchone()[0]
-    embedded = con.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+    labeled = con.execute("SELECT COUNT(DISTINCT post_id) FROM assignments").fetchone()[0]
+    unlabeled = categorize.unlabeled_count(con)
+
+    def tile(n, label, href=None):
+        inner = f"<b>{n:,}</b><span>{esc(label)}</span>"
+        return (
+            f'<a class="stat" href="{href}">{inner}</a>' if href else f'<div class="stat">{inner}</div>'
+        )
+
     body = (
         '<div class="stats">'
-        f'<div class="stat"><b>{posts:,}</b> bookmarks</div>'
-        f'<div class="stat"><b>{cats}</b> categories</div>'
-        f'<div class="stat"><b>{embedded:,}</b> embedded</div>'
-        "</div>"
+        + tile(posts, "bookmarks")
+        + tile(cats, "categories", "/ui/categories")
+        + tile(labeled, "labeled")
+        + tile(unlabeled, "unlabeled", "/ui/unlabeled")
+        + "</div>"
         "<p class=lead>Find a saved post by "
         "<a href='/ui/search'>searching by meaning</a>, "
         "<a href='/ui/ask'>asking a question</a>, or "
@@ -87,13 +96,24 @@ def ui_search(q: str = "", con=Depends(get_db), ai=Depends(get_ai)):
     )
     results = ""
     if q:
-        hits = search(con, ai, q, 24)
+        try:
+            hits = search(con, ai, q, 24)
+        except Exception:
+            return page("Search", form + _ai_error("Search"))
         results = (
             f'<div class="cards">{"".join(post_card(p) for p in hits)}</div>'
             if hits
             else "<p class=muted>No matches.</p>"
         )
     return page("Search", form + results)
+
+
+def _ai_error(what: str) -> str:
+    return (
+        '<div class="answer" style="border-left-color:#d64545">'
+        f"⚠️ {esc(what)} is temporarily unavailable — the AI service (Amazon Bedrock) "
+        "returned an error. Check your AWS credentials/region, then try again.</div>"
+    )
 
 
 def _ask_form(question: str, autofocus: bool = True) -> str:
@@ -125,7 +145,11 @@ def ui_ask(question: str = "", con=Depends(get_db), ai=Depends(get_ai)):
 
 @ui_router.post("/ui/ask")
 def ui_ask_post(question: str = Form(...), con=Depends(get_db), ai=Depends(get_ai)):
-    result = ask(con, ai, question, 30)
+    form = _ask_form(question, autofocus=False)
+    try:
+        result = ask(con, ai, question, 30)
+    except Exception:
+        return page("Ask", form + _ai_error("Ask"))
     cited = set(result["citations"])
     retrieved = result["retrieved"]
 
@@ -141,7 +165,6 @@ def ui_ask_post(question: str = Form(...), con=Depends(get_db), ai=Depends(get_a
         return html
 
     cards = "".join(_card(p) for p in retrieved)
-    form = _ask_form(question, autofocus=False)
     answer = f'<div class="answer">{esc(result.get("answer") or "")}</div>'
     sources = (
         f'<h3>{len(retrieved)} related bookmarks '
@@ -238,13 +261,19 @@ def ui_feed(parent: str = "", offset: int = 0, partial: int = 0, con=Depends(get
 
 @ui_router.get("/ui/categories/{category_id}")
 def ui_category(category_id: int, con=Depends(get_db)):
+    row = con.execute("SELECT name FROM categories WHERE id = ?", (category_id,)).fetchone()
+    name = row[0] if row else "Category"
     posts = categorize.posts_in_category(con, category_id)
+    head = (
+        '<p><a href="/ui/categories">← all categories</a></p>'
+        f"<p class=lead>{len(posts):,} bookmarks in this category.</p>"
+    )
     cards = (
         f'<div class="cards">{"".join(post_card(p) for p in posts)}</div>'
         if posts
         else "<p class=muted>No posts.</p>"
     )
-    return page("Category", cards)
+    return page(name, head + cards)
 
 
 @ui_router.get("/ui/unlabeled")
