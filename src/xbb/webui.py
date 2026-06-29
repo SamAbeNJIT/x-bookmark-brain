@@ -125,7 +125,7 @@ def ui_ask(question: str = "", con=Depends(get_db), ai=Depends(get_ai)):
 
 @ui_router.post("/ui/ask")
 def ui_ask_post(question: str = Form(...), con=Depends(get_db), ai=Depends(get_ai)):
-    result = ask(con, ai, question, 8)
+    result = ask(con, ai, question, 20)
     cited = {c for c in result["citations"]}
     cards = "".join(post_card(p) for p in result["retrieved"] if p["id"] in cited)
     form = _ask_form(question, autofocus=False)
