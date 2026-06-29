@@ -125,12 +125,31 @@ def ui_ask(question: str = "", con=Depends(get_db), ai=Depends(get_ai)):
 
 @ui_router.post("/ui/ask")
 def ui_ask_post(question: str = Form(...), con=Depends(get_db), ai=Depends(get_ai)):
-    result = ask(con, ai, question, 20)
-    cited = {c for c in result["citations"]}
-    cards = "".join(post_card(p) for p in result["retrieved"] if p["id"] in cited)
+    result = ask(con, ai, question, 30)
+    cited = set(result["citations"])
+    retrieved = result["retrieved"]
+
+    def _card(p):
+        html = post_card(p)
+        if p["id"] in cited:  # flag the ones the answer actually used
+            html = html.replace(
+                '<div class="head">',
+                '<div class="head"><span class="badge" '
+                'style="background:var(--accent-soft);color:var(--accent-ink)">★ cited</span>',
+                1,
+            )
+        return html
+
+    cards = "".join(_card(p) for p in retrieved)
     form = _ask_form(question, autofocus=False)
     answer = f'<div class="answer">{esc(result.get("answer") or "")}</div>'
-    sources = f'<h3>Cited bookmarks</h3><div class="cards">{cards}</div>' if cards else ""
+    sources = (
+        f'<h3>{len(retrieved)} related bookmarks '
+        f'<span class=muted>({len(cited)} cited in the answer)</span></h3>'
+        f'<div class="cards">{cards}</div>'
+        if retrieved
+        else ""
+    )
     return page("Ask", form + answer + sources)
 
 

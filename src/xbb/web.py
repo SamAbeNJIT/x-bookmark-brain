@@ -32,7 +32,7 @@ class RenameIn(BaseModel):
 
 class AskIn(BaseModel):
     question: str
-    k: int = 20
+    k: int = 30
 
 
 def create_app() -> FastAPI:
