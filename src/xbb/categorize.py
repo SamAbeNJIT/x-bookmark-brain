@@ -113,12 +113,16 @@ def assign_unassigned(
     Self-heal: the batch path occasionally returns nothing for a post that does have real text;
     such posts get one single-post retry (which is more thorough). Posts with no meaningful text
     (image-only / bare links) are NOT retried — they'd just come back empty and waste a call.
+
+    Each post is attempted at most once: after a try it's marked `label_attempted`, so posts that
+    end up with no label (image/link-only, or genuinely uncategorizable) are not re-sent on every
+    future sync — only never-attempted posts are processed.
     """
     rows = con.execute(
         """
         SELECT p.id, p.text FROM posts p
         LEFT JOIN assignments a ON a.post_id = p.id
-        WHERE a.post_id IS NULL AND p.text IS NOT NULL
+        WHERE a.post_id IS NULL AND p.text IS NOT NULL AND p.label_attempted IS NULL
         """
     ).fetchall()
     total = len(rows)
@@ -152,6 +156,7 @@ def assign_unassigned(
                 except Exception:
                     names = []
             _write(post_id, names)
+            con.execute("UPDATE posts SET label_attempted = 1 WHERE id = ?", (post_id,))
             processed += 1
         con.commit()
         if progress is not None:

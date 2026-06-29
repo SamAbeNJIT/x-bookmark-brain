@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS posts (
     like_count     INTEGER,
     repost_count   INTEGER,
     raw_json       TEXT,               -- original X payload, retained verbatim
-    bm_rank        INTEGER             -- bookmark-recency rank; higher = more recently saved
+    bm_rank        INTEGER,            -- bookmark-recency rank; higher = more recently saved
+    label_attempted INTEGER            -- 1 once labeling has been tried (avoid retrying every sync)
 );
 
 CREATE TABLE IF NOT EXISTS self_thread_posts (
@@ -96,6 +97,8 @@ def init_db(db_path: str) -> None:
         post_cols = [r[1] for r in con.execute("PRAGMA table_info(posts)")]
         if "bm_rank" not in post_cols:
             con.execute("ALTER TABLE posts ADD COLUMN bm_rank INTEGER")
+        if "label_attempted" not in post_cols:
+            con.execute("ALTER TABLE posts ADD COLUMN label_attempted INTEGER")
         con.commit()
     finally:
         con.close()
