@@ -17,8 +17,10 @@ def get_config() -> Config:
 
 
 def get_db():
+    # The web app connects as the restricted role so RLS is enforced (admin paths use the owner
+    # DSN). tenant_id is the single default today; auth will resolve it per request.
     cfg = Config.from_env()
-    con = connect(cfg.database_url, cfg.tenant_id)
+    con = connect(cfg.app_database_url, cfg.tenant_id)
     try:
         yield con
     finally:

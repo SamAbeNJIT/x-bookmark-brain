@@ -23,6 +23,10 @@ from xbb.web import create_app
 
 load_dotenv()  # tests need DATABASE_URL from .env (the CLI/app load it themselves)
 
+# Pure-logic tests (auth, parsing, PKCE) run without a database; DB-backed tests skip cleanly
+# when DATABASE_URL is absent (e.g. a GitHub-only checkout with no Neon access).
+_HAVE_DB = bool(os.environ.get("DATABASE_URL"))
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 # tenant-owned tables, child-first, so TRUNCATE ... CASCADE order is safe
@@ -81,6 +85,9 @@ class FakeClient:
 @pytest.fixture(scope="session", autouse=True)
 def _ensure_test_db():
     """Create neondb_test (once) and apply the schema before any test runs."""
+    if not _HAVE_DB:
+        yield
+        return
     real = os.environ["DATABASE_URL"]
     with psycopg.connect(real, autocommit=True) as c:
         if not c.execute("SELECT 1 FROM pg_database WHERE datname='neondb_test'").fetchone():
@@ -92,13 +99,16 @@ def _ensure_test_db():
 @pytest.fixture(autouse=True)
 def _point_at_test_db(monkeypatch):
     """Point any Config.from_env() during a test at the isolated test DB (cheap, no network)."""
-    monkeypatch.setenv("DATABASE_URL", _test_dsn())
+    if _HAVE_DB:
+        monkeypatch.setenv("DATABASE_URL", _test_dsn())
     yield
 
 
 @pytest.fixture
 def db() -> str:
     """A clean test database (truncated). Single-arg connect/init_db default the tenant."""
+    if not _HAVE_DB:
+        pytest.skip("DATABASE_URL not set — skipping DB-backed test")
     test_dsn = _test_dsn()
     con = storage.connect(test_dsn, DEFAULT_TENANT_ID)
     for t in _TABLES:
@@ -106,6 +116,15 @@ def db() -> str:
     con.commit()
     con.close()
     return test_dsn
+
+
+@pytest.fixture
+def app_db(db) -> str:
+    """Restricted-role DSN for the test DB (RLS enforced). Skips if the app role isn't set up."""
+    app = os.environ.get("APP_DATABASE_URL")
+    if not app:
+        pytest.skip("APP_DATABASE_URL not set — run scripts/setup_app_role.py")
+    return app.replace("/neondb?", "/neondb_test?")
 
 
 @pytest.fixture

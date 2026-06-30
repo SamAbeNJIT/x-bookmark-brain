@@ -25,8 +25,11 @@ class Config:
     bedrock_reasoning_model: str | None
     bedrock_embedding_model: str | None
 
-    # Storage — Neon/Postgres DSN + the active tenant
+    # Storage — Neon/Postgres DSNs + the active tenant.
+    # database_url = owner (DDL/migrations/admin); app_database_url = restricted role the web app
+    # connects as so RLS is enforced. Falls back to the owner DSN if the restricted role isn't set up.
     database_url: str | None
+    app_database_url: str | None
     tenant_id: str
 
     @classmethod
@@ -39,5 +42,6 @@ class Config:
             bedrock_reasoning_model=os.getenv("BEDROCK_REASONING_MODEL"),
             bedrock_embedding_model=os.getenv("BEDROCK_EMBEDDING_MODEL"),
             database_url=os.getenv("DATABASE_URL"),
+            app_database_url=os.getenv("APP_DATABASE_URL") or os.getenv("DATABASE_URL"),
             tenant_id=os.getenv("XBB_TENANT_ID", DEFAULT_TENANT_ID),
         )

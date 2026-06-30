@@ -39,6 +39,12 @@ _TENANT_DEFAULT = "current_setting('app.current_tenant', true)::uuid"
 SCHEMA = f"""
 CREATE EXTENSION IF NOT EXISTS vector;
 
+CREATE TABLE IF NOT EXISTS accounts (
+    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),  -- this id IS the tenant_id
+    email      text UNIQUE NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS authors (
     tenant_id     uuid NOT NULL DEFAULT {_TENANT_DEFAULT},
     id            text NOT NULL,
@@ -136,12 +142,45 @@ def _execscript(con: psycopg.Connection, sql: str) -> None:
             con.execute(stmt)
 
 
+# The restricted role the web app connects as so RLS is actually enforced (it lacks BYPASSRLS,
+# unlike the Neon owner). Created out-of-band by scripts/setup_app_role.py; granted here if present.
+APP_ROLE = "xbb_app"
+
+
+def _apply_grants(con: psycopg.Connection) -> None:
+    """Grant connect/table/sequence privileges to the restricted app role, if it exists."""
+    db = con.execute("SELECT current_database()").fetchone()[0]
+    con.execute(
+        f"""
+        DO $$
+        BEGIN
+          IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{APP_ROLE}') THEN
+            GRANT CONNECT ON DATABASE "{db}" TO {APP_ROLE};
+            GRANT USAGE ON SCHEMA public TO {APP_ROLE};
+            GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {APP_ROLE};
+            GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {APP_ROLE};
+          END IF;
+        END $$;
+        """
+    )
+
+
 def init_db(dsn: str, tenant_id: str | None = None) -> None:
-    """Create the extension, tables, vector index, and RLS policies. Safe to run repeatedly."""
+    """Create the extension, tables, vector index, RLS policies, grants, default account.
+
+    Safe to run repeatedly. Run as the database owner (DDL); the app connects as APP_ROLE.
+    """
+    tid = _tenant(tenant_id)
     with psycopg.connect(dsn) as con:
-        con.execute("SELECT set_config('app.current_tenant', %s, false)", (_tenant(tenant_id),))
+        con.execute("SELECT set_config('app.current_tenant', %s, false)", (tid,))
         _execscript(con, SCHEMA)
         _apply_rls(con)
+        _apply_grants(con)
+        # Seed the account row for the default/single-user tenant so its tenant_id is valid.
+        con.execute(
+            "INSERT INTO accounts (id, email) VALUES (%s, %s) ON CONFLICT (id) DO NOTHING",
+            (tid, "local@x-bookmark-brain"),
+        )
         con.commit()
 
 
