@@ -84,6 +84,7 @@ class BedrockAIClient:
         self.embedding_model = embedding_model
         self.labeling_model = labeling_model
         self.reasoning_model = reasoning_model
+        self._usage: list[dict[str, Any]] = []  # token counts per call, drained by pop_usage()
 
     def _runtime(self):  # pragma: no cover
         import boto3
@@ -101,7 +102,9 @@ class BedrockAIClient:
         for _ in range(7):
             try:
                 resp = runtime.invoke_model(modelId=model_id, body=json.dumps(body))
-                return json.loads(resp["body"].read())
+                payload = json.loads(resp["body"].read())
+                self._record_usage(model_id, payload)
+                return payload
             except ClientError as e:
                 code = e.response.get("Error", {}).get("Code", "")
                 if code in {"ThrottlingException", "TooManyRequestsException",
@@ -111,6 +114,24 @@ class BedrockAIClient:
                     continue
                 raise
         raise RuntimeError("Bedrock throttling: retries exhausted")
+
+    def _record_usage(self, model_id: str, payload: dict[str, Any]) -> None:  # pragma: no cover
+        """Accumulate token usage from a Bedrock response (Claude: usage{}, Titan: count)."""
+        if not isinstance(payload, dict):
+            return
+        usage = payload.get("usage")
+        if isinstance(usage, dict):  # Claude
+            in_tok, out_tok = int(usage.get("input_tokens", 0)), int(usage.get("output_tokens", 0))
+        elif "inputTextTokenCount" in payload:  # Titan embeddings (no output tokens)
+            in_tok, out_tok = int(payload.get("inputTextTokenCount", 0)), 0
+        else:
+            return
+        self._usage.append({"model": model_id, "input_tokens": in_tok, "output_tokens": out_tok})
+
+    def pop_usage(self) -> list[dict[str, Any]]:
+        """Return and clear accumulated per-call token usage (drained once per request/job)."""
+        events, self._usage = self._usage, []
+        return events
 
     def embed(self, texts: list[str]) -> list[list[float]]:  # pragma: no cover
         # Amazon Titan Text Embeddings: one inputText per call (no batch endpoint).

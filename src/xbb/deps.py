@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from fastapi import Request
 
-from . import auth
+from . import auth, usage
 from .ai import AIClient, BedrockAIClient
 from .config import Config
-from .storage import connect
+from .storage import connect, record_usage
 
 SESSION_COOKIE = "xbb_session"
 
@@ -42,11 +42,28 @@ def get_db(request: Request):
         con.close()
 
 
-def get_ai() -> AIClient:
+def get_ai(request: Request):
     cfg = Config.from_env()
-    return BedrockAIClient(
+    ai = BedrockAIClient(
         region=cfg.aws_region,
         embedding_model=cfg.bedrock_embedding_model,
         labeling_model=cfg.bedrock_labeling_model,
         reasoning_model=cfg.bedrock_reasoning_model,
     )
+    try:
+        yield ai
+    finally:
+        # Meter at the seam: flush this request's token usage to usage_events. Best-effort —
+        # metering must never break a response.
+        events = ai.pop_usage()
+        if events:
+            try:
+                con = connect(cfg.app_database_url, resolve_tenant(request, cfg))
+                try:
+                    for e in events:
+                        cost = usage.cost_of(e["model"], e["input_tokens"], e["output_tokens"])
+                        record_usage(con, e["model"], e["input_tokens"], e["output_tokens"], cost)
+                finally:
+                    con.close()
+            except Exception:
+                pass

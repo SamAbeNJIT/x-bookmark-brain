@@ -37,6 +37,9 @@ class Config:
     session_secret: str
     require_auth: bool
 
+    # Per-tenant monthly Bedrock spend cap (USD); None = unlimited. Enforced on /ask.
+    monthly_quota_usd: float | None
+
     @classmethod
     def from_env(cls) -> "Config":
         return cls(
@@ -51,4 +54,7 @@ class Config:
             tenant_id=os.getenv("XBB_TENANT_ID", DEFAULT_TENANT_ID),
             session_secret=os.getenv("SESSION_SECRET", "dev-insecure-secret-change-me"),
             require_auth=os.getenv("REQUIRE_AUTH", "").lower() in ("1", "true", "yes"),
+            monthly_quota_usd=(
+                float(os.environ["MONTHLY_QUOTA_USD"]) if os.getenv("MONTHLY_QUOTA_USD") else None
+            ),
         )

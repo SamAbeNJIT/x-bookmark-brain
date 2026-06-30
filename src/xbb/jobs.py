@@ -36,7 +36,7 @@ def _set(**kw: Any) -> None:
 
 
 def _run(cfg: Config) -> None:
-    from . import categorize, xapi
+    from . import categorize, storage, usage, xapi
     from .ai import BedrockAIClient
     from .search import index_posts
     from .storage import connect, init_db
@@ -65,6 +65,10 @@ def _run(cfg: Config) -> None:
             categorize.save_taxonomy(con, categorize.derive_taxonomy(con, ai))
         categorize.apply_default_parents(con)
         categorize.assign_unassigned(con, ai, progress=lambda d, t: _set(detail=f"labeling {d}/{t}"))
+
+        for e in ai.pop_usage():  # meter the sync's embedding + labeling spend
+            storage.record_usage(con, e["model"], e["input_tokens"], e["output_tokens"],
+                                 usage.cost_of(e["model"], e["input_tokens"], e["output_tokens"]))
 
         _set(step="done", detail=f"up to date — {added} new bookmark(s) added")
     except Exception as e:  # surface any failure to the UI instead of dying silently

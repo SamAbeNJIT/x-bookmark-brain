@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, Form, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from . import auth, authui, categorize, storage
+from . import auth, authui, categorize, storage, usage
 from .ask import ask
 from .config import Config
 from .deps import SESSION_COOKIE, get_ai, get_db
@@ -141,6 +141,10 @@ def create_app() -> FastAPI:
     # --- ask / RAG (#7) ---
     @app.post("/ask")
     def ask_route(body: AskIn, con=Depends(get_db), ai=Depends(get_ai)):
+        cfg = Config.from_env()
+        if not usage.within_quota(storage.usage_this_month(con), cfg.monthly_quota_usd):
+            return {"question": body.question, "citations": [], "retrieved": [],
+                    "answer": "You've reached your monthly usage limit. It resets next month."}
         return ask(con, ai, body.question, body.k)
 
     # HTML screens (issues #4–#7 UI), wired to the same logic + dependencies.
