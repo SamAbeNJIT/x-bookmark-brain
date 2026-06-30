@@ -98,9 +98,12 @@ def _ensure_test_db():
 
 @pytest.fixture(autouse=True)
 def _point_at_test_db(monkeypatch):
-    """Point any Config.from_env() during a test at the isolated test DB (cheap, no network)."""
+    """Point Config.from_env() at the test DB and force local fallbacks (no real AWS) in tests."""
     if _HAVE_DB:
         monkeypatch.setenv("DATABASE_URL", _test_dsn())
+    # Never touch real KMS/SES from the suite — use plaintext tokens + console magic links.
+    monkeypatch.delenv("KMS_KEY_ID", raising=False)
+    monkeypatch.delenv("SES_SENDER", raising=False)
     yield
 
 

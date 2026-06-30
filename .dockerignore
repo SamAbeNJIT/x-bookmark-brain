@@ -1,0 +1,13 @@
+# Keep the image small and secret-free.
+.venv/
+data/                 # local SQLite corpus (~237MB) — never ship it
+.env                  # secrets — injected as App Runner env vars instead
+.git/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+*.local.md
+scripts/
+.ruff_cache/
