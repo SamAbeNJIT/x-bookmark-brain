@@ -48,19 +48,22 @@ def _backfill() -> int:
     if not cfg.x_client_id:
         print("X_CLIENT_ID is not set in .env", file=sys.stderr)
         return 2
+    if not cfg.database_url:
+        print("DATABASE_URL is not set in .env", file=sys.stderr)
+        return 2
     from . import xapi
     from .storage import connect, init_db
 
-    init_db(cfg.db_path)
-    con = connect(cfg.db_path)
+    init_db(cfg.database_url, cfg.tenant_id)
+    con = connect(cfg.database_url, cfg.tenant_id)
     try:
         if not xapi.is_connected(con):
             print("Not connected to X. Start the web app and click 'Connect X' first "
                   "(http://127.0.0.1:8000).", file=sys.stderr)
             return 2
-        print(f"Backfilling bookmarks into {cfg.db_path} via the X API ...")
+        print("Backfilling bookmarks into the database via the X API ...")
         n = xapi.backfill_via_api(con, cfg.x_client_id, incremental=True)
-        print(f"Done. {n} new bookmark(s) stored in {cfg.db_path}.")
+        print(f"Done. {n} new bookmark(s) stored.")
     finally:
         con.close()
     return 0
@@ -72,9 +75,9 @@ def _index() -> int:
     from .search import index_posts
     from .storage import connect
 
-    con = connect(cfg.db_path)
+    con = connect(cfg.database_url, cfg.tenant_id)
     try:
-        print(f"Embedding bookmarks in {cfg.db_path} (resumable) ...")
+        print("Embedding bookmarks (resumable) ...")
         n = index_posts(con, _ai(cfg), progress=_progress)
     finally:
         con.close()
@@ -88,7 +91,7 @@ def _categorize() -> int:
     from . import categorize
     from .storage import connect
 
-    con = connect(cfg.db_path)
+    con = connect(cfg.database_url, cfg.tenant_id)
     try:
         ai = _ai(cfg)
         if not categorize.get_taxonomy(con):

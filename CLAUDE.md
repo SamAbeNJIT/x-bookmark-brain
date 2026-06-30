@@ -21,7 +21,8 @@ Single-context repo: `CONTEXT.md` + `docs/adr/` at the root. See `docs/agents/do
 
 ## Project conventions
 
-- Python + FastAPI backend, local SQLite + a local vector index. AI runs on Amazon Bedrock.
+- Python + FastAPI backend, Postgres + pgvector (Neon) for storage and vector search; schema is
+  multi-tenant (`tenant_id` + RLS) with a single default tenant locally. AI runs on Amazon Bedrock.
 - Use the domain vocabulary in `CONTEXT.md` for code, issues, and tests.
 - Keep the two architectural seams thin and well-defined: the **X ingestion client** and the
   **Bedrock AI client** (see `docs/PRD.md` → Testing Decisions). Test against these seams.

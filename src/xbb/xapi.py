@@ -183,7 +183,7 @@ def backfill_via_api(con, client_id: str, incremental: bool = True) -> int:
             rec = parse_bookmark_v2(tweet, users, media)
             if not rec["id"]:
                 continue
-            exists = con.execute("SELECT 1 FROM posts WHERE id = ?", (rec["id"],)).fetchone()
+            exists = con.execute("SELECT 1 FROM posts WHERE id = %s", (rec["id"],)).fetchone()
             _upsert_post(con, rec)
             if not exists:
                 new_in_page += 1
@@ -195,6 +195,6 @@ def backfill_via_api(con, client_id: str, incremental: bool = True) -> int:
     if new_ids:
         base = con.execute("SELECT COALESCE(MAX(bm_rank), 0) FROM posts").fetchone()[0]
         for i, pid in enumerate(reversed(new_ids)):  # oldest-of-batch first
-            con.execute("UPDATE posts SET bm_rank = ? WHERE id = ?", (base + 1 + i, pid))
+            con.execute("UPDATE posts SET bm_rank = %s WHERE id = %s", (base + 1 + i, pid))
         con.commit()
     return con.execute("SELECT COUNT(*) FROM posts").fetchone()[0] - before

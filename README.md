@@ -13,8 +13,8 @@ a question (sent to Amazon Bedrock) — never your library in bulk.
 - **One-shot backfill** of your full bookmark history via X's **official OAuth API** — you
   click "Connect X" and authorize (no password, no cookies). Idempotent and incremental:
   re-syncs pull only genuinely-new bookmarks (24h-deduplicated, so it's cheap).
-- **Semantic search** — find posts by meaning, not keywords. Vectors live locally; ranking
-  is an exact numpy cosine over the whole corpus (instant).
+- **Semantic search** — find posts by meaning, not keywords. Vectors live in Postgres
+  (pgvector, HNSW index); ranking is a cosine nearest-neighbour query in the database.
 - **Ask (RAG)** — ask a plain-language question; Claude answers and cites the saved posts it
   used (citations are constrained to what was actually retrieved).
 - **Auto-categorization** — a taxonomy *derived from your own bookmarks* (not a canned
@@ -31,6 +31,8 @@ bulk labeling, and a stronger Claude (Sonnet) for taxonomy derivation and answer
 
 ### Prerequisites
 - Python ≥ 3.11
+- A **Postgres database with pgvector** — [Neon](https://neon.com) is the easy path (create a
+  project, copy the connection string). The free tier (0.5 GB) fits a ~16k-bookmark corpus.
 - An AWS account with **Amazon Bedrock model access** enabled (Claude + Titan embeddings) in
   your region. Credentials come from the standard AWS chain (`~/.aws/credentials`, env vars,
   SSO, or an IAM role) — no keys live in this repo.
@@ -48,6 +50,7 @@ cp .env.example .env        # then fill it in
 
 `.env` (gitignored) — see `.env.example` for the full list:
 ```
+DATABASE_URL=postgresql://USER:PASSWORD@HOST.neon.tech/neondb?sslmode=require  # Neon + pgvector
 X_CLIENT_ID=...             # OAuth 2.0 Client ID from your X developer app
 X_REDIRECT_URI=http://127.0.0.1:8000/oauth/callback
 AWS_REGION=us-east-1
@@ -63,7 +66,7 @@ BEDROCK_REASONING_MODEL=us.anthropic.claude-sonnet-4-6               # taxonomy 
 ./run.sh                    # serves http://127.0.0.1:8000  (Ctrl-C to stop)
 ```
 Open the app → click **Connect X** → authorize. Then **Sync** pulls your bookmarks via the
-official API and (with Bedrock) embeds + labels them. Data persists on disk in `data/xbb.db`,
+official API and (with Bedrock) embeds + labels them. Data persists in your Postgres database,
 so you can stop/start freely. The CLI mirrors the steps once connected:
 ```bash
 python -m xbb backfill      # pull new bookmarks via the OAuth API (after Connect X)
@@ -93,9 +96,12 @@ network-free):
 - **AI / Bedrock** (`xbb.ai`) — wraps embeddings, labeling, and answers behind one interface;
   tests substitute a deterministic fake.
 
-Storage is a single SQLite file (`xbb.storage`, WAL mode): posts, authors, a discovered
-taxonomy, multi-label assignments, and embedding vectors. Search loads the vectors into numpy
-and ranks by cosine locally — no vector service, nothing leaving the machine.
+Storage is Postgres (`xbb.storage`): posts, authors, a discovered taxonomy, multi-label
+assignments, and embedding vectors (pgvector `vector(1024)` with an HNSW cosine index). Search
+is a `vector <=> query` nearest-neighbour query — the database does the ranking. The schema is
+multi-tenant from the ground up: every table carries a `tenant_id` (defaulted from a session
+variable) with Row-Level Security policies, so it's ready for hosted/multi-user without a
+rewrite. Locally you're the single default tenant.
 
 ## Commands
 
@@ -116,9 +122,9 @@ question.
 
 ## Privacy
 
-Single-user, local-first. Your bookmarks and index live only in `data/xbb.db` on your
-machine. The only outbound data is a search query or a question (to Bedrock), plus the
-handful of posts retrieved to ground an answer — never your library in bulk.
+Single-user. Your bookmarks and index live in your own Postgres database (e.g. your Neon
+project). Beyond that, the only outbound data is a search query or a question (to Bedrock),
+plus the handful of posts retrieved to ground an answer — never your library in bulk.
 
 ## More
 

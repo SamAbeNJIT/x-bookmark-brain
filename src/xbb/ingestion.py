@@ -162,8 +162,8 @@ def _upsert_author(con: Any, author: dict[str, Any]) -> None:
     if not author.get("id"):
         return
     con.execute(
-        "INSERT INTO authors (id, handle, display_name, avatar_url) VALUES (?, ?, ?, ?) "
-        "ON CONFLICT(id) DO UPDATE SET handle=excluded.handle, "
+        "INSERT INTO authors (id, handle, display_name, avatar_url) VALUES (%s, %s, %s, %s) "
+        "ON CONFLICT (tenant_id, id) DO UPDATE SET handle=excluded.handle, "
         "display_name=excluded.display_name, avatar_url=excluded.avatar_url",
         (author["id"], author.get("handle"), author.get("display_name"), author.get("avatar_url")),
     )
@@ -179,8 +179,8 @@ def _upsert_post(con: Any, rec: dict[str, Any]) -> None:
             id, url, text, lang, created_at, bookmarked_at, author_id, kind,
             parent_post_id, media_json, hashtags_json, links_json, like_count,
             repost_count, raw_json, bm_rank
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (tenant_id, id) DO UPDATE SET
             url=excluded.url, text=excluded.text, lang=excluded.lang,
             created_at=excluded.created_at, author_id=excluded.author_id, kind=excluded.kind,
             parent_post_id=excluded.parent_post_id, media_json=excluded.media_json,
@@ -211,7 +211,8 @@ def _upsert_post(con: Any, rec: dict[str, Any]) -> None:
 
 
 def run_backfill(
-    client: XClient, db_path: str, incremental: bool = False, resume: bool = False
+    client: XClient, dsn: str, tenant_id: str | None = None,
+    incremental: bool = False, resume: bool = False
 ) -> int:
     """Page through bookmarks, upsert by post id (idempotent), return count stored.
 
@@ -229,8 +230,8 @@ def run_backfill(
     can be continued with `resume=True` rather than re-paging from the start. Cleared when
     the timeline is fully paged.
     """
-    storage.init_db(db_path)
-    con = storage.connect(db_path)
+    storage.init_db(dsn, tenant_id)
+    con = storage.connect(dsn, tenant_id)
     # Cursor checkpointing only applies to a full backfill on the live client. (Incremental
     # tops up from the top and would otherwise overwrite the gap-fill resume point.)
     tracks_cursor = hasattr(client, "cursor") and not incremental
@@ -245,7 +246,7 @@ def run_backfill(
                     rec = parse_bookmark(raw)
                 except ValueError:
                     continue  # skip non-tweet entries defensively
-                exists = con.execute("SELECT 1 FROM posts WHERE id = ?", (rec["id"],)).fetchone()
+                exists = con.execute("SELECT 1 FROM posts WHERE id = %s", (rec["id"],)).fetchone()
                 _upsert_post(con, rec)  # stores bm_rank = X's sortIndex (true bookmark order)
                 count += 1
                 if not exists:

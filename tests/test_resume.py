@@ -31,8 +31,7 @@ class CursorClient:
             yield page
 
 
-def test_cursor_cleared_when_backfill_completes(tmp_path):
-    db = str(tmp_path / "x.db")
+def test_cursor_cleared_when_backfill_completes(db):
     run_backfill(CursorClient([[RAW]], final_cursor=None), db)
     con = connect(db)
     try:
@@ -41,8 +40,7 @@ def test_cursor_cleared_when_backfill_completes(tmp_path):
         con.close()
 
 
-def test_cursor_saved_when_backfill_interrupted(tmp_path):
-    db = str(tmp_path / "x.db")
+def test_cursor_saved_when_backfill_interrupted(db):
     run_backfill(CursorClient([[RAW]], final_cursor="RESUME_HERE"), db)
     con = connect(db)
     try:
@@ -51,8 +49,7 @@ def test_cursor_saved_when_backfill_interrupted(tmp_path):
         con.close()
 
 
-def test_resume_loads_saved_cursor_into_client(tmp_path):
-    db = str(tmp_path / "x.db")
+def test_resume_loads_saved_cursor_into_client(db):
     init_db(db)
     con = connect(db)
     set_sync_cursor(con, "SAVED")
@@ -63,8 +60,7 @@ def test_resume_loads_saved_cursor_into_client(tmp_path):
     assert client.start_cursor == "SAVED"  # resumed from the saved cursor, not the top
 
 
-def test_incremental_does_not_touch_resume_cursor(tmp_path):
-    db = str(tmp_path / "x.db")
+def test_incremental_does_not_touch_resume_cursor(db):
     init_db(db)
     con = connect(db)
     set_sync_cursor(con, "GAP_CURSOR")  # a pending gap-fill resume point

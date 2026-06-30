@@ -303,7 +303,7 @@ def ui_feed(parent: str = "", offset: int = 0, partial: int = 0, con=Depends(get
 
 @ui_router.get("/ui/categories/{category_id}")
 def ui_category(category_id: int, con=Depends(get_db)):
-    row = con.execute("SELECT name FROM categories WHERE id = ?", (category_id,)).fetchone()
+    row = con.execute("SELECT name FROM categories WHERE id = %s", (category_id,)).fetchone()
     name = row[0] if row else "Category"
     posts = categorize.posts_in_category(con, category_id)
     head = (

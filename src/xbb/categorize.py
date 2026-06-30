@@ -6,63 +6,69 @@ delete), then used to multi-label posts. All AI calls go through the `AIClient` 
 
 from __future__ import annotations
 
-import sqlite3
 from typing import Any, Callable
+
+import psycopg
 
 from .ai import AIClient
 
 
 # --- #5: taxonomy derivation + review -------------------------------------------------
 
-def derive_taxonomy(con: sqlite3.Connection, ai: AIClient, sample_size: int = 500) -> list[dict[str, str]]:
+def derive_taxonomy(con: psycopg.Connection, ai: AIClient, sample_size: int = 500) -> list[dict[str, str]]:
     """Ask the AI seam to propose a starter taxonomy from a sample of post texts.
 
     Samples randomly across the whole corpus (not insertion/recency order) so the proposed
     categories reflect the user's full history, not just what they bookmarked most recently.
     """
     texts = [r[0] for r in con.execute(
-        "SELECT text FROM posts WHERE text IS NOT NULL ORDER BY RANDOM() LIMIT ?", (sample_size,)
+        "SELECT text FROM posts WHERE text IS NOT NULL ORDER BY random() LIMIT %s", (sample_size,)
     )]
     return ai.derive_taxonomy(texts)
 
 
-def save_taxonomy(con: sqlite3.Connection, categories: list[dict[str, str]]) -> None:
+def save_taxonomy(con: psycopg.Connection, categories: list[dict[str, str]]) -> None:
     """Persist the user-approved categories (upsert by name)."""
     for c in categories:
         con.execute(
-            "INSERT INTO categories (name, definition) VALUES (?, ?) "
-            "ON CONFLICT(name) DO UPDATE SET definition = excluded.definition",
+            "INSERT INTO categories (name, definition) VALUES (%s, %s) "
+            "ON CONFLICT (tenant_id, name) DO UPDATE SET definition = excluded.definition",
             (c["name"], c.get("definition")),
         )
     con.commit()
 
 
-def get_taxonomy(con: sqlite3.Connection) -> list[dict[str, Any]]:
+def get_taxonomy(con: psycopg.Connection) -> list[dict[str, Any]]:
     return [
         {"id": r[0], "name": r[1], "definition": r[2]}
         for r in con.execute("SELECT id, name, definition FROM categories ORDER BY name")
     ]
 
 
-def rename_category(con: sqlite3.Connection, category_id: int, new_name: str) -> None:
-    con.execute("UPDATE categories SET name = ? WHERE id = ?", (new_name, category_id))
+def rename_category(con: psycopg.Connection, category_id: int, new_name: str) -> None:
+    con.execute("UPDATE categories SET name = %s WHERE id = %s", (new_name, category_id))
     con.commit()
 
 
-def delete_category(con: sqlite3.Connection, category_id: int) -> None:
-    con.execute("DELETE FROM assignments WHERE category_id = ?", (category_id,))
-    con.execute("DELETE FROM categories WHERE id = ?", (category_id,))
+def delete_category(con: psycopg.Connection, category_id: int) -> None:
+    con.execute("DELETE FROM assignments WHERE category_id = %s", (category_id,))
+    con.execute("DELETE FROM categories WHERE id = %s", (category_id,))
     con.commit()
 
 
-def merge_categories(con: sqlite3.Connection, source_id: int, target_id: int) -> None:
-    """Move source's assignments to target, then drop source."""
+def merge_categories(con: psycopg.Connection, source_id: int, target_id: int) -> None:
+    """Move source's assignments to target, then drop source.
+
+    Skip posts already in target (they'd collide on the (tenant, post, category) PK) — the
+    Postgres equivalent of SQLite's UPDATE OR IGNORE.
+    """
     con.execute(
-        "UPDATE OR IGNORE assignments SET category_id = ? WHERE category_id = ?",
-        (target_id, source_id),
+        "UPDATE assignments SET category_id = %s WHERE category_id = %s "
+        "AND post_id NOT IN (SELECT post_id FROM assignments WHERE category_id = %s)",
+        (target_id, source_id, target_id),
     )
-    con.execute("DELETE FROM assignments WHERE category_id = ?", (source_id,))
-    con.execute("DELETE FROM categories WHERE id = ?", (source_id,))
+    con.execute("DELETE FROM assignments WHERE category_id = %s", (source_id,))
+    con.execute("DELETE FROM categories WHERE id = %s", (source_id,))
     con.commit()
 
 
@@ -77,9 +83,9 @@ def _labelable(text: str | None) -> bool:
     return len(t) >= 40 and t.count(" ") >= 2
 
 
-def assign_post(con: sqlite3.Connection, ai: AIClient, post_id: str) -> list[str]:
+def assign_post(con: psycopg.Connection, ai: AIClient, post_id: str) -> list[str]:
     """Assign one post to one or more existing categories. Returns the applied names."""
-    row = con.execute("SELECT text FROM posts WHERE id = ?", (post_id,)).fetchone()
+    row = con.execute("SELECT text FROM posts WHERE id = %s", (post_id,)).fetchone()
     if not row or row[0] is None:
         return []
     taxonomy = get_taxonomy(con)
@@ -89,7 +95,8 @@ def assign_post(con: sqlite3.Connection, ai: AIClient, post_id: str) -> list[str
         category_id = name_to_id.get(name)
         if category_id is not None:
             con.execute(
-                "INSERT OR IGNORE INTO assignments (post_id, category_id) VALUES (?, ?)",
+                "INSERT INTO assignments (post_id, category_id) VALUES (%s, %s) "
+                "ON CONFLICT DO NOTHING",
                 (post_id, category_id),
             )
             applied.append(name)
@@ -98,7 +105,7 @@ def assign_post(con: sqlite3.Connection, ai: AIClient, post_id: str) -> list[str
 
 
 def assign_unassigned(
-    con: sqlite3.Connection,
+    con: psycopg.Connection,
     ai: AIClient,
     progress: Callable[[int, int], None] | None = None,
     batch_size: int = 20,
@@ -121,7 +128,7 @@ def assign_unassigned(
     rows = con.execute(
         """
         SELECT p.id, p.text FROM posts p
-        LEFT JOIN assignments a ON a.post_id = p.id
+        LEFT JOIN assignments a ON a.tenant_id = p.tenant_id AND a.post_id = p.id
         WHERE a.post_id IS NULL AND p.text IS NOT NULL AND p.label_attempted IS NULL
         """
     ).fetchall()
@@ -136,7 +143,8 @@ def assign_unassigned(
             category_id = name_to_id.get(name)
             if category_id is not None:
                 con.execute(
-                    "INSERT OR IGNORE INTO assignments (post_id, category_id) VALUES (?, ?)",
+                    "INSERT INTO assignments (post_id, category_id) VALUES (%s, %s) "
+                    "ON CONFLICT DO NOTHING",
                     (post_id, category_id),
                 )
 
@@ -156,7 +164,7 @@ def assign_unassigned(
                 except Exception:
                     names = []
             _write(post_id, names)
-            con.execute("UPDATE posts SET label_attempted = 1 WHERE id = ?", (post_id,))
+            con.execute("UPDATE posts SET label_attempted = 1 WHERE id = %s", (post_id,))
             processed += 1
         con.commit()
         if progress is not None:
@@ -164,7 +172,7 @@ def assign_unassigned(
     return processed
 
 
-def categories_with_counts(con: sqlite3.Connection) -> list[dict[str, Any]]:
+def categories_with_counts(con: psycopg.Connection) -> list[dict[str, Any]]:
     return [
         {"id": r[0], "name": r[1], "count": r[2]}
         for r in con.execute(
@@ -207,19 +215,19 @@ DEFAULT_PARENTS: dict[str, str] = {
 }
 
 
-def apply_default_parents(con: sqlite3.Connection) -> int:
+def apply_default_parents(con: psycopg.Connection) -> int:
     """Set categories.parent from DEFAULT_PARENTS by name. Returns rows updated."""
     n = 0
     for name, parent in DEFAULT_PARENTS.items():
         cur = con.execute(
-            "UPDATE categories SET parent = ? WHERE name = ?", (parent, name)
+            "UPDATE categories SET parent = %s WHERE name = %s", (parent, name)
         )
         n += cur.rowcount
     con.commit()
     return n
 
 
-def category_tree(con: sqlite3.Connection) -> list[dict[str, Any]]:
+def category_tree(con: psycopg.Connection) -> list[dict[str, Any]]:
     """Group categories under their parent for the tree view.
 
     Returns [{parent, total, children: [{id, name, count}]}], parents sorted by total
@@ -248,8 +256,8 @@ def category_tree(con: sqlite3.Connection) -> list[dict[str, Any]]:
     return tree
 
 
-def posts_in_category(con: sqlite3.Connection, category_id: int) -> list[dict[str, Any]]:
-    row = con.execute("SELECT parent FROM categories WHERE id = ?", (category_id,)).fetchone()
+def posts_in_category(con: psycopg.Connection, category_id: int) -> list[dict[str, Any]]:
+    row = con.execute("SELECT parent FROM categories WHERE id = %s", (category_id,)).fetchone()
     parent = row[0] if row else None
     return [
         {"id": r[0], "url": r[1], "text": r[2], "handle": r[3],
@@ -258,9 +266,9 @@ def posts_in_category(con: sqlite3.Connection, category_id: int) -> list[dict[st
             """
             SELECT p.id, p.url, p.text, au.handle, au.avatar_url, p.media_json
             FROM posts p
-            JOIN assignments a ON a.post_id = p.id
-            LEFT JOIN authors au ON au.id = p.author_id
-            WHERE a.category_id = ?
+            JOIN assignments a ON a.tenant_id = p.tenant_id AND a.post_id = p.id
+            LEFT JOIN authors au ON au.tenant_id = p.tenant_id AND au.id = p.author_id
+            WHERE a.category_id = %s
             ORDER BY p.bm_rank DESC
             """,
             (category_id,),
@@ -268,15 +276,16 @@ def posts_in_category(con: sqlite3.Connection, category_id: int) -> list[dict[st
     ]
 
 
-def unlabeled_count(con: sqlite3.Connection) -> int:
+def unlabeled_count(con: psycopg.Connection) -> int:
     """How many posts have no category assignment at all."""
     return con.execute(
-        "SELECT COUNT(*) FROM posts p LEFT JOIN assignments a ON a.post_id = p.id "
+        "SELECT COUNT(*) FROM posts p "
+        "LEFT JOIN assignments a ON a.tenant_id = p.tenant_id AND a.post_id = p.id "
         "WHERE a.post_id IS NULL"
     ).fetchone()[0]
 
 
-def posts_unlabeled(con: sqlite3.Connection, limit: int = 600) -> list[dict[str, Any]]:
+def posts_unlabeled(con: psycopg.Connection, limit: int = 600) -> list[dict[str, Any]]:
     """Posts with no category assignment, newest-saved first — the 'Unlabeled' bucket."""
     return [
         {"id": r[0], "url": r[1], "text": r[2], "handle": r[3],
@@ -285,11 +294,11 @@ def posts_unlabeled(con: sqlite3.Connection, limit: int = 600) -> list[dict[str,
             """
             SELECT p.id, p.url, p.text, au.handle, au.avatar_url, p.media_json
             FROM posts p
-            LEFT JOIN assignments a ON a.post_id = p.id
-            LEFT JOIN authors au ON au.id = p.author_id
+            LEFT JOIN assignments a ON a.tenant_id = p.tenant_id AND a.post_id = p.id
+            LEFT JOIN authors au ON au.tenant_id = p.tenant_id AND au.id = p.author_id
             WHERE a.post_id IS NULL
             ORDER BY p.bm_rank DESC
-            LIMIT ?
+            LIMIT %s
             """,
             (limit,),
         )
@@ -297,7 +306,7 @@ def posts_unlabeled(con: sqlite3.Connection, limit: int = 600) -> list[dict[str,
 
 
 def feed_posts(
-    con: sqlite3.Connection, parent: str | None = None, limit: int = 150, offset: int = 0
+    con: psycopg.Connection, parent: str | None = None, limit: int = 150, offset: int = 0
 ) -> list[dict[str, Any]]:
     """A page of posts for the color feed, each tagged with one parent group (for tinting).
 
@@ -305,22 +314,23 @@ def feed_posts(
     under one group (arbitrary when unfiltered; the matching one when filtered). `offset`
     drives the rolling/infinite-scroll paging.
     """
-    cols = """
-        SELECT p.id, p.url, p.text, au.handle, au.avatar_url, p.media_json, c.parent
+    # DISTINCT ON (p.id) shows a post once even if it's in several categories of the group.
+    inner = """
+        SELECT DISTINCT ON (p.id)
+               p.id, p.url, p.text, au.handle, au.avatar_url, p.media_json, c.parent, p.bm_rank
         FROM posts p
-        JOIN assignments a ON a.post_id = p.id
+        JOIN assignments a ON a.tenant_id = p.tenant_id AND a.post_id = p.id
         JOIN categories c ON c.id = a.category_id
-        LEFT JOIN authors au ON au.id = p.author_id
+        LEFT JOIN authors au ON au.tenant_id = p.tenant_id AND au.id = p.author_id
     """
-    if parent:
-        rows = con.execute(
-            cols + " WHERE c.parent = ? GROUP BY p.id ORDER BY p.bm_rank DESC LIMIT ? OFFSET ?",
-            (parent, limit, offset),
-        )
-    else:
-        rows = con.execute(
-            cols + " GROUP BY p.id ORDER BY p.bm_rank DESC LIMIT ? OFFSET ?", (limit, offset)
-        )
+    where = " WHERE c.parent = %s" if parent else ""
+    sql = (
+        "SELECT id, url, text, handle, avatar_url, media_json, parent FROM ("
+        + inner + where + " ORDER BY p.id, p.bm_rank DESC"
+        + ") s ORDER BY bm_rank DESC LIMIT %s OFFSET %s"
+    )
+    params = (parent, limit, offset) if parent else (limit, offset)
+    rows = con.execute(sql, params)
     return [
         {"id": r[0], "url": r[1], "text": r[2], "handle": r[3],
          "avatar_url": r[4], "media_json": r[5], "parent": r[6]}

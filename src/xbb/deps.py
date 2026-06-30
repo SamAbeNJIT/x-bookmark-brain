@@ -18,7 +18,7 @@ def get_config() -> Config:
 
 def get_db():
     cfg = Config.from_env()
-    con = connect(cfg.db_path)
+    con = connect(cfg.database_url, cfg.tenant_id)
     try:
         yield con
     finally:

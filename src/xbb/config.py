@@ -8,6 +8,10 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+# Fixed tenant for the single-user/dev deployment (you = tenant #1). Multi-tenant auth
+# (plan Inc 3) will resolve this per-request instead of from a constant.
+DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
+
 
 @dataclass(frozen=True)
 class Config:
@@ -21,8 +25,9 @@ class Config:
     bedrock_reasoning_model: str | None
     bedrock_embedding_model: str | None
 
-    # Local storage
-    db_path: str
+    # Storage — Neon/Postgres DSN + the active tenant
+    database_url: str | None
+    tenant_id: str
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -33,5 +38,6 @@ class Config:
             bedrock_labeling_model=os.getenv("BEDROCK_LABELING_MODEL"),
             bedrock_reasoning_model=os.getenv("BEDROCK_REASONING_MODEL"),
             bedrock_embedding_model=os.getenv("BEDROCK_EMBEDDING_MODEL"),
-            db_path=os.getenv("XBB_DB_PATH", "data/xbb.db"),
+            database_url=os.getenv("DATABASE_URL"),
+            tenant_id=os.getenv("XBB_TENANT_ID", DEFAULT_TENANT_ID),
         )

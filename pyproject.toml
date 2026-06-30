@@ -12,8 +12,10 @@ dependencies = [
     "pydantic",
     "python-dotenv",
     "python-multipart",  # HTML form posts for the web UI
-    "numpy",          # in-memory cosine search over stored embeddings
-    # vector index — pick during the search slice (e.g. sqlite-vec or lancedb)
+    "numpy",          # vector math (embedding -> bytes/list)
+    "psycopg[binary]",   # Postgres driver (Neon)
+    "psycopg-pool",      # connection pooling for the web app
+    "pgvector",          # pgvector type adapter for psycopg
 ]
 
 [project.optional-dependencies]

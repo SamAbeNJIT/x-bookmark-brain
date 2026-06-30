@@ -6,14 +6,15 @@ actually pulled, never fabricated sources.
 
 from __future__ import annotations
 
-import sqlite3
 from typing import Any
+
+import psycopg
 
 from .ai import AIClient
 from .search import search
 
 
-def ask(con: sqlite3.Connection, ai: AIClient, question: str, k: int = 8) -> dict[str, Any]:
+def ask(con: psycopg.Connection, ai: AIClient, question: str, k: int = 8) -> dict[str, Any]:
     retrieved = search(con, ai, question, k)
     result = ai.answer(question, retrieved)
     retrieved_ids = {r["id"] for r in retrieved}

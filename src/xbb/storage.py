@@ -1,142 +1,187 @@
-"""Local persistence (SQLite) for bookmarks, authors, taxonomy, and assignments.
+"""Persistence on Postgres (Neon) for bookmarks, authors, taxonomy, assignments, vectors.
 
-The schema encodes the data decisions from docs/PRD.md. The `embeddings` table is the
-vector store; wiring an ANN index over it (e.g. sqlite-vec) lands in the semantic-search
-slice (#4). Posts are keyed by X post id so backfill upserts are idempotent.
+Multi-tenant from the schema down: every tenant-owned table carries a ``tenant_id`` that
+defaults from the ``app.current_tenant`` session GUC, and Row-Level Security policies scope
+reads/writes to it. The app sets the GUC once per connection (see ``connect``).
+
+Isolation status: the policies are defined and FORCEd now, so the schema is "tenant-ready".
+DB-enforced isolation becomes airtight once the app connects as a restricted (non-owner)
+role — that lands with multi-tenant auth (plan Inc 3). Until then there is a single tenant
+(you), so there is no other tenant's data to leak regardless. Writes are already stamped
+with the right ``tenant_id`` via the column DEFAULT.
+
+Vectors live in the ``embeddings`` table as pgvector ``vector(1024)`` with an HNSW cosine
+index; semantic search is a single ``ORDER BY vector <=> query`` in ``search.py``.
 """
 
 from __future__ import annotations
 
-import sqlite3
-from pathlib import Path
+import os
 
-SCHEMA = """
+import psycopg
+from pgvector.psycopg import register_vector
+
+from .config import DEFAULT_TENANT_ID
+
+
+def _tenant(tenant_id: str | None) -> str:
+    """Resolve the active tenant: explicit arg, else env, else the single-user default."""
+    return tenant_id or os.getenv("XBB_TENANT_ID", DEFAULT_TENANT_ID)
+
+# Tables owned by a tenant (get tenant_id + RLS). Order matters for FK creation.
+_TENANT_TABLES = ("authors", "posts", "self_thread_posts", "categories", "assignments",
+                  "embeddings", "sync_state")
+
+# current_setting(..., true) = missing_ok: returns NULL if the GUC is unset, so an
+# unscoped connection writes NULL into a NOT NULL column (fails closed) and matches no rows.
+_TENANT_DEFAULT = "current_setting('app.current_tenant', true)::uuid"
+
+SCHEMA = f"""
+CREATE EXTENSION IF NOT EXISTS vector;
+
 CREATE TABLE IF NOT EXISTS authors (
-    id            TEXT PRIMARY KEY,
-    handle        TEXT,
-    display_name  TEXT,
-    avatar_url    TEXT                -- profile image URL (pbs.twimg.com), nullable
+    tenant_id     uuid NOT NULL DEFAULT {_TENANT_DEFAULT},
+    id            text NOT NULL,
+    handle        text,
+    display_name  text,
+    avatar_url    text,
+    PRIMARY KEY (tenant_id, id)
 );
 
 CREATE TABLE IF NOT EXISTS posts (
-    id             TEXT PRIMARY KEY,   -- X post id; upsert target for idempotent backfill
-    url            TEXT,
-    text           TEXT,
-    lang           TEXT,
-    created_at     TEXT,
-    bookmarked_at  TEXT,
-    author_id      TEXT REFERENCES authors(id),
-    kind           TEXT,               -- 'original' | 'reply' | 'quote'
-    parent_post_id TEXT,               -- parent (reply) or quoted (quote) post, nullable
-    media_json     TEXT,               -- [{url, alt_text, type}]
-    hashtags_json  TEXT,
-    links_json     TEXT,
-    like_count     INTEGER,
-    repost_count   INTEGER,
-    raw_json       TEXT,               -- original X payload, retained verbatim
-    bm_rank        INTEGER,            -- bookmark-recency rank; higher = more recently saved
-    label_attempted INTEGER            -- 1 once labeling has been tried (avoid retrying every sync)
+    tenant_id      uuid NOT NULL DEFAULT {_TENANT_DEFAULT},
+    id             text NOT NULL,        -- X post id, with tenant_id the upsert target
+    source         text NOT NULL DEFAULT 'x',
+    url            text,
+    text           text,
+    lang           text,
+    created_at     text,
+    bookmarked_at  text,
+    author_id      text,
+    kind           text,                 -- 'original' | 'reply' | 'quote'
+    parent_post_id text,
+    media_json     text,                 -- [{{url, alt_text, type}}]
+    hashtags_json  text,
+    links_json     text,
+    like_count     integer,
+    repost_count   integer,
+    raw_json       text,                 -- original X payload, retained verbatim
+    bm_rank        bigint,               -- bookmark-recency rank; higher = more recently saved
+    label_attempted integer,             -- 1 once labeling has been tried
+    PRIMARY KEY (tenant_id, id),
+    FOREIGN KEY (tenant_id, author_id) REFERENCES authors (tenant_id, id)
 );
 
 CREATE TABLE IF NOT EXISTS self_thread_posts (
-    root_post_id TEXT REFERENCES posts(id),
-    position     INTEGER,
-    post_id      TEXT REFERENCES posts(id),
-    PRIMARY KEY (root_post_id, position)
+    tenant_id    uuid NOT NULL DEFAULT {_TENANT_DEFAULT},
+    root_post_id text NOT NULL,
+    position     integer NOT NULL,
+    post_id      text NOT NULL,
+    PRIMARY KEY (tenant_id, root_post_id, position)
 );
 
 CREATE TABLE IF NOT EXISTS categories (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    name       TEXT UNIQUE,
-    definition TEXT,
-    parent     TEXT                -- top-level grouping for the category tree, nullable
+    tenant_id  uuid NOT NULL DEFAULT {_TENANT_DEFAULT},
+    id         bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,  -- globally unique surrogate
+    name       text,
+    definition text,
+    parent     text,
+    UNIQUE (tenant_id, name)
 );
 
 CREATE TABLE IF NOT EXISTS assignments (
-    post_id     TEXT REFERENCES posts(id),
-    category_id INTEGER REFERENCES categories(id),
-    PRIMARY KEY (post_id, category_id)   -- multi-label, one row per (post, category)
+    tenant_id   uuid NOT NULL DEFAULT {_TENANT_DEFAULT},
+    post_id     text NOT NULL,
+    category_id bigint NOT NULL REFERENCES categories (id),
+    PRIMARY KEY (tenant_id, post_id, category_id)   -- multi-label, one row per (post, category)
 );
 
 CREATE TABLE IF NOT EXISTS embeddings (
-    post_id TEXT PRIMARY KEY REFERENCES posts(id),
-    vector  BLOB
+    tenant_id uuid NOT NULL DEFAULT {_TENANT_DEFAULT},
+    post_id   text NOT NULL,
+    vector    vector(1024),
+    PRIMARY KEY (tenant_id, post_id)
 );
 
+CREATE INDEX IF NOT EXISTS embeddings_vector_hnsw
+    ON embeddings USING hnsw (vector vector_cosine_ops);
+
 CREATE TABLE IF NOT EXISTS sync_state (
-    key   TEXT PRIMARY KEY,   -- e.g. 'bookmarks_cursor'
-    value TEXT
+    tenant_id uuid NOT NULL DEFAULT {_TENANT_DEFAULT},
+    key       text NOT NULL,   -- e.g. 'bookmarks_cursor', 'x_oauth'
+    value     text,
+    PRIMARY KEY (tenant_id, key)
 );
 """
 
 
-def connect(db_path: str) -> sqlite3.Connection:
-    """Open a connection with foreign keys enabled."""
-    con = sqlite3.connect(db_path)
-    con.execute("PRAGMA foreign_keys = ON")
-    con.execute("PRAGMA journal_mode = WAL")     # readers don't block the refill writer
-    con.execute("PRAGMA busy_timeout = 5000")  # wait, don't error, if a refill is writing
+def _apply_rls(con: psycopg.Connection) -> None:
+    """Enable + FORCE RLS and (re)create the tenant-isolation policy on every tenant table."""
+    for table in _TENANT_TABLES:
+        con.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
+        con.execute(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY")
+        con.execute(f"DROP POLICY IF EXISTS tenant_isolation ON {table}")
+        con.execute(
+            f"CREATE POLICY tenant_isolation ON {table} "
+            f"USING (tenant_id = {_TENANT_DEFAULT}) "
+            f"WITH CHECK (tenant_id = {_TENANT_DEFAULT})"
+        )
+
+
+def _execscript(con: psycopg.Connection, sql: str) -> None:
+    """Run a multi-statement DDL script (psycopg sends one command per execute)."""
+    no_comments = "\n".join(line.split("--", 1)[0] for line in sql.splitlines())
+    for stmt in (s.strip() for s in no_comments.split(";")):
+        if stmt:
+            con.execute(stmt)
+
+
+def init_db(dsn: str, tenant_id: str | None = None) -> None:
+    """Create the extension, tables, vector index, and RLS policies. Safe to run repeatedly."""
+    with psycopg.connect(dsn) as con:
+        con.execute("SELECT set_config('app.current_tenant', %s, false)", (_tenant(tenant_id),))
+        _execscript(con, SCHEMA)
+        _apply_rls(con)
+        con.commit()
+
+
+def connect(dsn: str, tenant_id: str | None = None) -> psycopg.Connection:
+    """Open a tenant-scoped connection: bind app.current_tenant and register the vector type."""
+    con = psycopg.connect(dsn)
+    con.execute("SELECT set_config('app.current_tenant', %s, false)", (_tenant(tenant_id),))
+    con.commit()
+    register_vector(con)
     return con
 
 
-def init_db(db_path: str) -> None:
-    """Create all tables (and the vector store) if absent. Safe to run repeatedly."""
-    parent = Path(db_path).expanduser().parent
-    if parent and not parent.exists():
-        parent.mkdir(parents=True, exist_ok=True)
-    con = connect(db_path)
-    try:
-        con.executescript(SCHEMA)
-        # Migrations: add columns to databases created before these features.
-        cat_cols = [r[1] for r in con.execute("PRAGMA table_info(categories)")]
-        if "parent" not in cat_cols:
-            con.execute("ALTER TABLE categories ADD COLUMN parent TEXT")
-        author_cols = [r[1] for r in con.execute("PRAGMA table_info(authors)")]
-        if "avatar_url" not in author_cols:
-            con.execute("ALTER TABLE authors ADD COLUMN avatar_url TEXT")
-        post_cols = [r[1] for r in con.execute("PRAGMA table_info(posts)")]
-        if "bm_rank" not in post_cols:
-            con.execute("ALTER TABLE posts ADD COLUMN bm_rank INTEGER")
-        if "label_attempted" not in post_cols:
-            con.execute("ALTER TABLE posts ADD COLUMN label_attempted INTEGER")
-        con.commit()
-    finally:
-        con.close()
+# --------------------------------------------------------------------------- key/value state
+# RLS scopes these to the current tenant; inserts get tenant_id from the column DEFAULT.
 
 
-def get_state(con: sqlite3.Connection, key: str) -> str | None:
-    """Read an arbitrary value from the sync_state key/value store (e.g. OAuth tokens JSON)."""
-    row = con.execute("SELECT value FROM sync_state WHERE key = ?", (key,)).fetchone()
+def get_state(con: psycopg.Connection, key: str) -> str | None:
+    """Read an arbitrary value from the sync_state store (e.g. OAuth tokens JSON)."""
+    row = con.execute("SELECT value FROM sync_state WHERE key = %s", (key,)).fetchone()
     return row[0] if row and row[0] else None
 
 
-def set_state(con: sqlite3.Connection, key: str, value: str | None) -> None:
+def set_state(con: psycopg.Connection, key: str, value: str | None) -> None:
     """Write/clear an arbitrary sync_state value."""
     if value is None:
-        con.execute("DELETE FROM sync_state WHERE key = ?", (key,))
+        con.execute("DELETE FROM sync_state WHERE key = %s", (key,))
     else:
         con.execute(
-            "INSERT INTO sync_state (key, value) VALUES (?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            "INSERT INTO sync_state (key, value) VALUES (%s, %s) "
+            "ON CONFLICT (tenant_id, key) DO UPDATE SET value = excluded.value",
             (key, value),
         )
     con.commit()
 
 
-def get_sync_cursor(con: sqlite3.Connection) -> str | None:
+def get_sync_cursor(con: psycopg.Connection) -> str | None:
     """The saved bookmarks pagination cursor to resume from, or None (never started / done)."""
-    row = con.execute("SELECT value FROM sync_state WHERE key = 'bookmarks_cursor'").fetchone()
-    return row[0] if row and row[0] else None
+    return get_state(con, "bookmarks_cursor")
 
 
-def set_sync_cursor(con: sqlite3.Connection, cursor: str | None) -> None:
+def set_sync_cursor(con: psycopg.Connection, cursor: str | None) -> None:
     """Persist where the next backfill should resume. None clears it (the sync finished)."""
-    if cursor:
-        con.execute(
-            "INSERT INTO sync_state (key, value) VALUES ('bookmarks_cursor', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            (cursor,),
-        )
-    else:
-        con.execute("DELETE FROM sync_state WHERE key = 'bookmarks_cursor'")
-    con.commit()
+    set_state(con, "bookmarks_cursor", cursor)

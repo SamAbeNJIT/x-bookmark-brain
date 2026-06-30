@@ -43,8 +43,8 @@ def _run(cfg: Config) -> None:
 
     con = None
     try:
-        init_db(cfg.db_path)
-        con = connect(cfg.db_path)
+        init_db(cfg.database_url, cfg.tenant_id)
+        con = connect(cfg.database_url, cfg.tenant_id)
 
         _set(step="backfill", detail="fetching new bookmarks from X…")
         added = xapi.backfill_via_api(con, cfg.x_client_id, incremental=True)
@@ -93,8 +93,8 @@ def start() -> bool:
         return False
     from . import xapi
     from .storage import connect, init_db
-    init_db(cfg.db_path)
-    _c = connect(cfg.db_path)
+    init_db(cfg.database_url, cfg.tenant_id)
+    _c = connect(cfg.database_url, cfg.tenant_id)
     try:
         connected = xapi.is_connected(_c)
     finally:

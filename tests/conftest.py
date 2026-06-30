@@ -1,32 +1,54 @@
-"""Shared test fixtures: a seeded database, a fake AI client, and a wired TestClient.
+"""Shared test fixtures: an isolated Neon test DB, a fake AI client, and a wired TestClient.
 
-The fake AI implements the full `AIClient` interface deterministically so logic and
-endpoints can be tested without any live X or Bedrock call.
+Tests run against a dedicated ``neondb_test`` database (created on the same Neon project) so
+they never touch real data and can truncate freely. The fake AI implements the full
+``AIClient`` interface deterministically so logic and endpoints are tested without any live X
+or Bedrock call.
 """
 
 import json
+import os
 from pathlib import Path
 
+import psycopg
 import pytest
+from dotenv import load_dotenv
 from fastapi.testclient import TestClient
 
+from xbb import storage
+from xbb.config import DEFAULT_TENANT_ID
 from xbb.deps import get_ai, get_db
 from xbb.ingestion import run_backfill
-from xbb.storage import connect
 from xbb.web import create_app
 
+load_dotenv()  # tests need DATABASE_URL from .env (the CLI/app load it themselves)
+
 FIXTURES = Path(__file__).parent / "fixtures"
+
+# tenant-owned tables, child-first, so TRUNCATE ... CASCADE order is safe
+_TABLES = ("assignments", "embeddings", "self_thread_posts", "posts",
+           "authors", "categories", "sync_state")
 
 
 def load(name: str) -> dict:
     return json.loads((FIXTURES / name).read_text())
 
 
+def _test_dsn() -> str:
+    """The isolated test database DSN, derived from DATABASE_URL by swapping the db name."""
+    return os.environ["DATABASE_URL"].replace("/neondb?", "/neondb_test?")
+
+
 class FakeAI:
     VOCAB = ["rag", "eval", "agents", "exactly", "quote", "original"]
 
     def embed(self, texts):
-        return [[float(t.lower().count(w)) for w in self.VOCAB] for t in texts]
+        # bias dim (avoids all-zero vectors) + vocab bag-of-words, padded to the vector(1024) column
+        out = []
+        for t in texts:
+            v = [1.0] + [float(t.lower().count(w)) for w in self.VOCAB]
+            out.append(v + [0.0] * (1024 - len(v)))
+        return out
 
     def derive_taxonomy(self, samples):
         return [
@@ -56,14 +78,43 @@ class FakeClient:
         yield from self._pages
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _ensure_test_db():
+    """Create neondb_test (once) and apply the schema before any test runs."""
+    real = os.environ["DATABASE_URL"]
+    with psycopg.connect(real, autocommit=True) as c:
+        if not c.execute("SELECT 1 FROM pg_database WHERE datname='neondb_test'").fetchone():
+            c.execute("CREATE DATABASE neondb_test")
+    storage.init_db(_test_dsn(), DEFAULT_TENANT_ID)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _point_at_test_db(monkeypatch):
+    """Point any Config.from_env() during a test at the isolated test DB (cheap, no network)."""
+    monkeypatch.setenv("DATABASE_URL", _test_dsn())
+    yield
+
+
+@pytest.fixture
+def db() -> str:
+    """A clean test database (truncated). Single-arg connect/init_db default the tenant."""
+    test_dsn = _test_dsn()
+    con = storage.connect(test_dsn, DEFAULT_TENANT_ID)
+    for t in _TABLES:
+        con.execute(f"TRUNCATE {t} CASCADE")
+    con.commit()
+    con.close()
+    return test_dsn
+
+
 @pytest.fixture
 def fake_ai():
     return FakeAI()
 
 
 @pytest.fixture
-def seeded_db(tmp_path):
-    db = str(tmp_path / "xbb.db")
+def seeded_db(db) -> str:
     page = [load("original.json"), load("reply.json"), load("quote.json")]
     run_backfill(FakeClient([page]), db)
     return db
@@ -74,7 +125,7 @@ def client(seeded_db, fake_ai):
     app = create_app()
 
     def _db():
-        con = connect(seeded_db)
+        con = storage.connect(seeded_db)
         try:
             yield con
         finally:
