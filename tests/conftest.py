@@ -116,6 +116,11 @@ def db() -> str:
     con = storage.connect(test_dsn, DEFAULT_TENANT_ID)
     for t in _TABLES:
         con.execute(f"TRUNCATE {t} CASCADE")
+    # Fund the default account so route tests pass the credit gate; credit tests set their own.
+    con.execute(
+        "UPDATE accounts SET credit_balance_usd = 100, ingestion_paid = true WHERE id = %s",
+        (DEFAULT_TENANT_ID,),
+    )
     con.commit()
     con.close()
     return test_dsn

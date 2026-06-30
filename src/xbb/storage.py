@@ -48,7 +48,9 @@ CREATE TABLE IF NOT EXISTS accounts (
     subscription_status   text,        -- 'active' | 'past_due' | 'canceled' | NULL
     stripe_customer_id    text,
     stripe_subscription_id text,
-    monthly_quota_usd     double precision  -- per-account cap; NULL = use the config default
+    monthly_quota_usd     double precision, -- per-account cap; NULL = use the config default
+    credit_balance_usd    double precision NOT NULL DEFAULT 0,   -- prepaid credits, drawn down by asks
+    ingestion_paid        boolean NOT NULL DEFAULT false         -- one-time ingestion charge settled?
 );
 
 CREATE TABLE IF NOT EXISTS authors (
@@ -189,6 +191,8 @@ _MIGRATIONS = (
     "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS stripe_customer_id text",
     "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS stripe_subscription_id text",
     "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS monthly_quota_usd double precision",
+    "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS credit_balance_usd double precision NOT NULL DEFAULT 0",
+    "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS ingestion_paid boolean NOT NULL DEFAULT false",
 )
 
 
@@ -307,6 +311,63 @@ def account_monthly_quota(con: psycopg.Connection) -> float | None:
         "WHERE id = current_setting('app.current_tenant', true)::uuid"
     ).fetchone()
     return float(row[0]) if row and row[0] is not None else None
+
+
+# --------------------------------------------------------------------------- credits
+# Prepaid balance drawn down by billable actions (asks). All scoped to the current tenant.
+
+
+def credit_balance(con: psycopg.Connection) -> float:
+    row = con.execute(
+        "SELECT credit_balance_usd FROM accounts "
+        "WHERE id = current_setting('app.current_tenant', true)::uuid"
+    ).fetchone()
+    return float(row[0]) if row and row[0] is not None else 0.0
+
+
+def add_credits(con: psycopg.Connection, account_id: str, amount_usd: float) -> None:
+    """Top up an account's prepaid balance (called from the Stripe one-time-payment webhook)."""
+    con.execute(
+        "UPDATE accounts SET credit_balance_usd = credit_balance_usd + %s WHERE id = %s",
+        (amount_usd, account_id),
+    )
+    con.commit()
+
+
+def debit_credits(con: psycopg.Connection, amount_usd: float) -> bool:
+    """Atomically charge the current tenant if it has the balance. Returns False if insufficient
+    (the WHERE clause prevents a balance from ever going negative under concurrent asks)."""
+    row = con.execute(
+        "UPDATE accounts SET credit_balance_usd = credit_balance_usd - %s "
+        "WHERE id = current_setting('app.current_tenant', true)::uuid "
+        "AND credit_balance_usd >= %s RETURNING credit_balance_usd",
+        (amount_usd, amount_usd),
+    ).fetchone()
+    con.commit()
+    return row is not None
+
+
+def refund_credits(con: psycopg.Connection, amount_usd: float) -> None:
+    """Return a debited amount to the current tenant (e.g. when an ask fails after charging)."""
+    con.execute(
+        "UPDATE accounts SET credit_balance_usd = credit_balance_usd + %s "
+        "WHERE id = current_setting('app.current_tenant', true)::uuid",
+        (amount_usd,),
+    )
+    con.commit()
+
+
+def is_ingestion_paid(con: psycopg.Connection) -> bool:
+    row = con.execute(
+        "SELECT ingestion_paid FROM accounts "
+        "WHERE id = current_setting('app.current_tenant', true)::uuid"
+    ).fetchone()
+    return bool(row and row[0])
+
+
+def set_ingestion_paid(con: psycopg.Connection, account_id: str, paid: bool = True) -> None:
+    con.execute("UPDATE accounts SET ingestion_paid = %s WHERE id = %s", (paid, account_id))
+    con.commit()
 
 
 # --------------------------------------------------------------------------- usage metering

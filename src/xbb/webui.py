@@ -11,8 +11,7 @@ import json
 from fastapi import APIRouter, Depends, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from . import categorize, jobs, xapi, xauth
-from .ask import ask
+from . import categorize, credits, jobs, xapi, xauth
 from .config import Config
 from .deps import get_ai, get_db
 from .search import search
@@ -188,8 +187,13 @@ def ui_ask(question: str = "", con=Depends(get_db), ai=Depends(get_ai)):
 @ui_router.post("/ui/ask")
 def ui_ask_post(question: str = Form(...), con=Depends(get_db), ai=Depends(get_ai)):
     form = _ask_form(question, autofocus=False)
+    cfg = Config.from_env()
     try:
-        result = ask(con, ai, question, 30)
+        result = credits.ask_charged(con, ai, question, 30, cfg.ask_price_usd)
+    except credits.OutOfCredits:
+        msg = (f'<div class="answer">You\'re out of credits — each question costs '
+               f'${cfg.ask_price_usd:.2f}. <a href="/ui/billing">Top up</a> to continue.</div>')
+        return page("Ask", form + msg)
     except Exception:
         return page("Ask", form + _ai_error("Ask"))
     cited = set(result["citations"])

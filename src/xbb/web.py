@@ -13,8 +13,7 @@ from fastapi import Depends, FastAPI, Form, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from . import auth, authui, billing, categorize, mail, storage, usage
-from .ask import ask
+from . import auth, authui, billing, categorize, credits, mail, storage
 from .config import Config
 from .deps import SESSION_COOKIE, get_ai, get_db
 from .search import index_posts, search
@@ -232,13 +231,12 @@ def create_app() -> FastAPI:
     @app.post("/ask")
     def ask_route(body: AskIn, con=Depends(get_db), ai=Depends(get_ai)):
         cfg = Config.from_env()
-        cap = storage.account_monthly_quota(con)  # per-account cap wins; else the config default
-        if cap is None:
-            cap = cfg.monthly_quota_usd
-        if not usage.within_quota(storage.usage_this_month(con), cap):
+        try:
+            return credits.ask_charged(con, ai, body.question, body.k, cfg.ask_price_usd)
+        except credits.OutOfCredits:
             return {"question": body.question, "citations": [], "retrieved": [],
-                    "answer": "You've reached your monthly usage limit. It resets next month."}
-        return ask(con, ai, body.question, body.k)
+                    "answer": f"You're out of credits. Each question costs "
+                              f"${cfg.ask_price_usd:.2f} — top up on the Billing page to continue."}
 
     # HTML screens (issues #4–#7 UI), wired to the same logic + dependencies.
     app.include_router(ui_router)

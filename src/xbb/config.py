@@ -46,6 +46,10 @@ class Config:
     stripe_price_id: str | None
     stripe_webhook_secret: str | None
 
+    # Credits model: flat price charged per ask; one-time ingestion price (display).
+    ask_price_usd: float
+    ingestion_price_usd: float
+
     # AWS hardening: KMS key for encrypting X OAuth tokens; SES sender for magic-link emails.
     # Both optional — unset → tokens stored plaintext / magic link logged to console (local dev).
     kms_key_id: str | None
@@ -71,6 +75,8 @@ class Config:
             stripe_secret_key=os.getenv("STRIPE_SECRET_KEY"),
             stripe_price_id=os.getenv("STRIPE_PRICE_ID"),
             stripe_webhook_secret=os.getenv("STRIPE_WEBHOOK_SECRET"),
+            ask_price_usd=float(os.getenv("ASK_PRICE_USD", "0.10")),
+            ingestion_price_usd=float(os.getenv("INGESTION_PRICE_USD", "9.99")),
             kms_key_id=os.getenv("KMS_KEY_ID"),
             ses_sender=os.getenv("SES_SENDER"),
         )

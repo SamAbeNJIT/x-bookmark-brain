@@ -21,7 +21,9 @@ def test_login_token_round_trip():
 
 def test_login_token_rejects_tampering():
     token = make_login_token("alice@example.com", SECRET)
-    tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+    # Flip the FIRST char (always fully significant) — the last base64 char carries padding bits,
+    # so flipping it can be a no-op and intermittently leave the token valid.
+    tampered = ("B" if token[0] == "A" else "A") + token[1:]
     assert verify_login_token(tampered, SECRET) is None
 
 
