@@ -244,6 +244,24 @@ def create_app() -> FastAPI:
     # HTML screens (issues #4–#7 UI), wired to the same logic + dependencies.
     app.include_router(ui_router)
 
+    # When REQUIRE_AUTH is on (hosted/multi-user), gate everything behind a valid session except
+    # the public surface (login, the OAuth/auth endpoints, the Stripe webhook, health).
+    _PUBLIC_EXACT = {"/health", "/login"}
+    _PUBLIC_PREFIX = ("/auth/", "/oauth/", "/static/")
+
+    @app.middleware("http")
+    async def _auth_gate(request: Request, call_next):
+        cfg = Config.from_env()
+        if cfg.require_auth:
+            path = request.url.path
+            public = (path in _PUBLIC_EXACT or path == "/billing/webhook"
+                      or path.startswith(_PUBLIC_PREFIX))
+            if not public:
+                token = request.cookies.get(SESSION_COOKIE)
+                if not (token and auth.verify_session_token(token, cfg.session_secret)):
+                    return RedirectResponse("/login", status_code=303)
+        return await call_next(request)
+
     return app
 
 
