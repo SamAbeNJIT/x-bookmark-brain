@@ -208,7 +208,7 @@ def init_db(dsn: str, tenant_id: str | None = None) -> None:
         # Seed the account row for the default/single-user tenant so its tenant_id is valid.
         con.execute(
             "INSERT INTO accounts (id, email) VALUES (%s, %s) ON CONFLICT (id) DO NOTHING",
-            (tid, "local@x-bookmark-brain"),
+            (tid, "local@bookmarkbrain.app"),  # valid-format placeholder (Stripe rejects no-TLD)
         )
         con.commit()
 
