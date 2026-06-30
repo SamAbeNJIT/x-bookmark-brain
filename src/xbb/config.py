@@ -11,7 +11,11 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Config:
-    # X session credentials for the one-time backfill
+    # X OAuth 2.0 (PKCE public client) — the sanctioned bookmarks API path
+    x_client_id: str | None
+    x_redirect_uri: str
+
+    # Legacy X session cookies (deprecated cookie-scraping path; OAuth replaces these)
     x_auth_token: str | None
     x_csrf_token: str | None
 
@@ -27,6 +31,8 @@ class Config:
     @classmethod
     def from_env(cls) -> "Config":
         return cls(
+            x_client_id=os.getenv("X_CLIENT_ID"),
+            x_redirect_uri=os.getenv("X_REDIRECT_URI", "http://127.0.0.1:8000/oauth/callback"),
             x_auth_token=os.getenv("X_AUTH_TOKEN"),
             x_csrf_token=os.getenv("X_CSRF_TOKEN"),
             aws_region=os.getenv("AWS_REGION", "us-east-1"),

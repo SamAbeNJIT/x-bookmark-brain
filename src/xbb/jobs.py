@@ -36,9 +36,8 @@ def _set(**kw: Any) -> None:
 
 
 def _run(cfg: Config) -> None:
-    from . import categorize
+    from . import categorize, xapi
     from .ai import BedrockAIClient
-    from .ingestion import DEFAULT_QUERY_ID, GraphQLXClient, run_backfill
     from .search import index_posts
     from .storage import connect, init_db
 
@@ -46,16 +45,9 @@ def _run(cfg: Config) -> None:
     try:
         init_db(cfg.db_path)
         con = connect(cfg.db_path)
-        before = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
 
         _set(step="backfill", detail="fetching new bookmarks from X…")
-        client = GraphQLXClient(
-            cfg.x_auth_token,
-            cfg.x_csrf_token,
-            query_id=os.getenv("X_BOOKMARKS_QUERY_ID", DEFAULT_QUERY_ID),
-        )
-        run_backfill(client, cfg.db_path, incremental=True)
-        added = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0] - before
+        added = xapi.backfill_via_api(con, cfg.x_client_id, incremental=True)
         _set(added=added)
 
         ai = BedrockAIClient(
@@ -95,9 +87,21 @@ def start() -> bool:
              "error": None, "started_at": time.time(), "finished_at": None}
         )
     cfg = Config.from_env()
-    if not cfg.x_auth_token or not cfg.x_csrf_token:
+    if not cfg.x_client_id:
         _set(running=False, step="error",
-             error="Missing X_AUTH_TOKEN / X_CSRF_TOKEN in .env (rotate/refresh your X cookies).",
+             error="X_CLIENT_ID is not set in .env.", finished_at=time.time())
+        return False
+    from . import xapi
+    from .storage import connect, init_db
+    init_db(cfg.db_path)
+    _c = connect(cfg.db_path)
+    try:
+        connected = xapi.is_connected(_c)
+    finally:
+        _c.close()
+    if not connected:
+        _set(running=False, step="error",
+             error="Not connected to X yet — click 'Connect X' on the home page first.",
              finished_at=time.time())
         return False
     threading.Thread(target=_run, args=(cfg,), daemon=True).start()

@@ -11,13 +11,17 @@ import json
 from fastapi import APIRouter, Depends, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from . import categorize, jobs
+from . import categorize, jobs, xapi, xauth
 from .ask import ask
+from .config import Config
 from .deps import get_ai, get_db
 from .search import search
 from .templates import esc, legend, page, parent_color, post_card
 
 ui_router = APIRouter()
+
+# Short-lived PKCE verifiers keyed by state, between /oauth/login and /oauth/callback.
+_pending_pkce: dict[str, str] = {}
 
 
 @ui_router.get("/")
@@ -44,11 +48,49 @@ def home(con=Depends(get_db)):
         "<a href='/ui/search'>searching by meaning</a>, "
         "<a href='/ui/ask'>asking a question</a>, or "
         "<a href='/ui/categories'>browsing by category</a>.</p>"
-        '<form method=post action="/ui/refresh">'
-        "<button>↻ Sync new bookmarks</button> "
-        "<span class=muted>pulls, embeds &amp; labels anything new</span></form>"
     )
+    if xapi.is_connected(con):
+        body += (
+            '<form method=post action="/ui/refresh">'
+            "<button>↻ Sync new bookmarks</button> "
+            "<span class=muted>✓ connected to X · pulls, embeds &amp; labels anything new</span></form>"
+        )
+    else:
+        body += (
+            '<p><a class="stat" style="display:inline-block;text-decoration:none" '
+            'href="/oauth/login"><b style="font-size:1rem">Connect X →</b>'
+            '<span>authorize read access to your bookmarks</span></a></p>'
+        )
     return page("Your bookmark brain", body)
+
+
+@ui_router.get("/oauth/login")
+def oauth_login():
+    cfg = Config.from_env()
+    if not cfg.x_client_id:
+        return page("Connect X", "<p class=muted>X_CLIENT_ID is not set in .env.</p>")
+    verifier, challenge = xauth.make_pkce()
+    state = xauth.make_state()
+    _pending_pkce[state] = verifier
+    return RedirectResponse(
+        xauth.authorize_url(cfg.x_client_id, cfg.x_redirect_uri, state, challenge), status_code=307
+    )
+
+
+@ui_router.get("/oauth/callback")
+def oauth_callback(code: str = "", state: str = "", error: str = "", con=Depends(get_db)):
+    if error:
+        return page("Connect X", f'<div class="answer" style="border-left-color:#d64545">X denied the connection: {esc(error)}</div>')
+    verifier = _pending_pkce.pop(state, None)
+    if not verifier or not code:
+        return page("Connect X", '<div class="answer" style="border-left-color:#d64545">Connection expired or invalid — start again from Sync.</div>')
+    cfg = Config.from_env()
+    try:
+        tok = xauth.exchange_code(cfg.x_client_id, cfg.x_redirect_uri, code, verifier)
+        xapi.save_tokens(con, tok)
+    except Exception as e:
+        return page("Connect X", f'<div class="answer" style="border-left-color:#d64545">Token exchange failed: {esc(type(e).__name__)}. Check the app settings (Native/public client, redirect URI).</div>')
+    return RedirectResponse(url="/ui/refresh", status_code=303)
 
 
 @ui_router.post("/ui/refresh")

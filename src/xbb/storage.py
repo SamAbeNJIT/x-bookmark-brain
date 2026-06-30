@@ -104,6 +104,25 @@ def init_db(db_path: str) -> None:
         con.close()
 
 
+def get_state(con: sqlite3.Connection, key: str) -> str | None:
+    """Read an arbitrary value from the sync_state key/value store (e.g. OAuth tokens JSON)."""
+    row = con.execute("SELECT value FROM sync_state WHERE key = ?", (key,)).fetchone()
+    return row[0] if row and row[0] else None
+
+
+def set_state(con: sqlite3.Connection, key: str, value: str | None) -> None:
+    """Write/clear an arbitrary sync_state value."""
+    if value is None:
+        con.execute("DELETE FROM sync_state WHERE key = ?", (key,))
+    else:
+        con.execute(
+            "INSERT INTO sync_state (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+    con.commit()
+
+
 def get_sync_cursor(con: sqlite3.Connection) -> str | None:
     """The saved bookmarks pagination cursor to resume from, or None (never started / done)."""
     row = con.execute("SELECT value FROM sync_state WHERE key = 'bookmarks_cursor'").fetchone()
