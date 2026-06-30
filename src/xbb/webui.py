@@ -8,19 +8,17 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, Form
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from . import categorize, credits, jobs, storage, xapi, xauth
 from .config import Config
-from .deps import get_ai, get_db
+from .deps import get_ai, get_db, resolve_tenant
 from .search import search
 from .templates import esc, legend, page, parent_color, post_card
 
 ui_router = APIRouter()
 
-# Short-lived PKCE verifiers keyed by state, between /oauth/login and /oauth/callback.
-_pending_pkce: dict[str, str] = {}
 
 
 @ui_router.get("/")
@@ -64,13 +62,13 @@ def home(con=Depends(get_db)):
 
 
 @ui_router.get("/oauth/login")
-def oauth_login():
+def oauth_login(con=Depends(get_db)):
     cfg = Config.from_env()
     if not cfg.x_client_id:
         return page("Connect X", "<p class=muted>X_CLIENT_ID is not set in .env.</p>")
     verifier, challenge = xauth.make_pkce()
     state = xauth.make_state()
-    _pending_pkce[state] = verifier
+    storage.set_pkce(con, state, verifier)  # DB-backed: survives across web instances
     return RedirectResponse(
         xauth.authorize_url(cfg.x_client_id, cfg.x_redirect_uri, state, challenge), status_code=307
     )
@@ -80,7 +78,7 @@ def oauth_login():
 def oauth_callback(code: str = "", state: str = "", error: str = "", con=Depends(get_db)):
     if error:
         return page("Connect X", f'<div class="answer" style="border-left-color:#d64545">X denied the connection: {esc(error)}</div>')
-    verifier = _pending_pkce.pop(state, None)
+    verifier = storage.pop_pkce(con, state)
     if not verifier or not code:
         return page("Connect X", '<div class="answer" style="border-left-color:#d64545">Connection expired or invalid — start again from Sync.</div>')
     cfg = Config.from_env()
@@ -93,11 +91,11 @@ def oauth_callback(code: str = "", state: str = "", error: str = "", con=Depends
 
 
 @ui_router.post("/ui/refresh")
-def ui_refresh_start(con=Depends(get_db)):
+def ui_refresh_start(request: Request, con=Depends(get_db)):
     # Ingestion gate: importing/syncing bookmarks requires the one-time ingestion charge.
     if not storage.is_ingestion_paid(con):
         return RedirectResponse(url="/ui/billing", status_code=303)
-    jobs.start()
+    jobs.start(resolve_tenant(request, Config.from_env()))  # sync runs under THIS user's tenant
     return RedirectResponse(url="/ui/refresh", status_code=303)
 
 

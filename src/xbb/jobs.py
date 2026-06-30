@@ -35,7 +35,7 @@ def _set(**kw: Any) -> None:
         _status.update(kw)
 
 
-def _run(cfg: Config) -> None:
+def _run(cfg: Config, tenant_id: str) -> None:
     from . import categorize, storage, usage, xapi
     from .ai import BedrockAIClient
     from .search import index_posts
@@ -43,8 +43,8 @@ def _run(cfg: Config) -> None:
 
     con = None
     try:
-        init_db(cfg.database_url, cfg.tenant_id)
-        con = connect(cfg.database_url, cfg.tenant_id)
+        init_db(cfg.database_url, tenant_id)            # owner: ensure schema (idempotent)
+        con = connect(cfg.app_database_url, tenant_id)  # restricted role: RLS-scoped to this tenant
 
         _set(step="backfill", detail="fetching new bookmarks from X…")
         added = xapi.backfill_via_api(con, cfg.x_client_id, incremental=True)
@@ -81,8 +81,8 @@ def _run(cfg: Config) -> None:
             _status["finished_at"] = time.time()
 
 
-def start() -> bool:
-    """Kick off a refill if one isn't already running. Returns True if it started."""
+def start(tenant_id: str | None = None) -> bool:
+    """Kick off a refill for a tenant (defaults to the config tenant). Returns True if it started."""
     with _lock:
         if _status["running"]:
             return False
@@ -91,14 +91,15 @@ def start() -> bool:
              "error": None, "started_at": time.time(), "finished_at": None}
         )
     cfg = Config.from_env()
+    tid = tenant_id or cfg.tenant_id
     if not cfg.x_client_id:
         _set(running=False, step="error",
              error="X_CLIENT_ID is not set in .env.", finished_at=time.time())
         return False
     from . import xapi
     from .storage import connect, init_db
-    init_db(cfg.database_url, cfg.tenant_id)
-    _c = connect(cfg.database_url, cfg.tenant_id)
+    init_db(cfg.database_url, tid)
+    _c = connect(cfg.app_database_url, tid)
     try:
         connected = xapi.is_connected(_c)
     finally:
@@ -108,5 +109,5 @@ def start() -> bool:
              error="Not connected to X yet — click 'Connect X' on the home page first.",
              finished_at=time.time())
         return False
-    threading.Thread(target=_run, args=(cfg,), daemon=True).start()
+    threading.Thread(target=_run, args=(cfg, tid), daemon=True).start()
     return True

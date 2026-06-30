@@ -252,6 +252,21 @@ def set_state(con: psycopg.Connection, key: str, value: str | None) -> None:
     con.commit()
 
 
+def set_pkce(con: psycopg.Connection, state: str, verifier: str) -> None:
+    """Stash an OAuth PKCE verifier (keyed by state) in the DB so the login→callback handshake
+    survives across web instances (App Runner autoscaling)."""
+    set_state(con, f"pkce:{state}", verifier)
+
+
+def pop_pkce(con: psycopg.Connection, state: str) -> str | None:
+    """Fetch and delete the PKCE verifier for a state (one-time use)."""
+    key = f"pkce:{state}"
+    verifier = get_state(con, key)
+    if verifier is not None:
+        set_state(con, key, None)
+    return verifier
+
+
 def get_or_create_account(con: psycopg.Connection, email: str) -> str:
     """Return the account id for an email, creating the account on first sign-in. (No RLS on
     accounts — it's the tenant registry, queried by email before a tenant is known.)"""
