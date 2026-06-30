@@ -11,7 +11,7 @@ import json
 from fastapi import APIRouter, Depends, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from . import categorize, credits, jobs, xapi, xauth
+from . import categorize, credits, jobs, storage, xapi, xauth
 from .config import Config
 from .deps import get_ai, get_db
 from .search import search
@@ -93,7 +93,10 @@ def oauth_callback(code: str = "", state: str = "", error: str = "", con=Depends
 
 
 @ui_router.post("/ui/refresh")
-def ui_refresh_start():
+def ui_refresh_start(con=Depends(get_db)):
+    # Ingestion gate: importing/syncing bookmarks requires the one-time ingestion charge.
+    if not storage.is_ingestion_paid(con):
+        return RedirectResponse(url="/ui/billing", status_code=303)
     jobs.start()
     return RedirectResponse(url="/ui/refresh", status_code=303)
 

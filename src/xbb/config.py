@@ -45,6 +45,9 @@ class Config:
     stripe_secret_key: str | None
     stripe_price_id: str | None
     stripe_webhook_secret: str | None
+    # One-time prices for the credits model: ingestion charge + a credit pack.
+    stripe_ingest_price_id: str | None
+    stripe_credit_price_id: str | None
 
     # Credits model: flat price charged per ask; one-time ingestion price (display).
     ask_price_usd: float
@@ -75,6 +78,8 @@ class Config:
             stripe_secret_key=os.getenv("STRIPE_SECRET_KEY"),
             stripe_price_id=os.getenv("STRIPE_PRICE_ID"),
             stripe_webhook_secret=os.getenv("STRIPE_WEBHOOK_SECRET"),
+            stripe_ingest_price_id=os.getenv("STRIPE_INGEST_PRICE_ID"),
+            stripe_credit_price_id=os.getenv("STRIPE_CREDIT_PRICE_ID"),
             ask_price_usd=float(os.getenv("ASK_PRICE_USD", "0.10")),
             ingestion_price_usd=float(os.getenv("INGESTION_PRICE_USD", "9.99")),
             kms_key_id=os.getenv("KMS_KEY_ID"),

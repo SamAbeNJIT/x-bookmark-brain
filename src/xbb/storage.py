@@ -209,10 +209,13 @@ def init_db(dsn: str, tenant_id: str | None = None) -> None:
             con.execute(stmt)
         _apply_rls(con)
         _apply_grants(con)
-        # Seed the account row for the default/single-user tenant so its tenant_id is valid.
+        # Seed the default/single-user (owner) account: pre-paid + funded so local use is never
+        # gated by billing. Real signups create their own accounts starting unpaid with $0.
+        # (email is a valid-format placeholder — Stripe rejects no-TLD addresses.)
         con.execute(
-            "INSERT INTO accounts (id, email) VALUES (%s, %s) ON CONFLICT (id) DO NOTHING",
-            (tid, "local@bookmarkbrain.app"),  # valid-format placeholder (Stripe rejects no-TLD)
+            "INSERT INTO accounts (id, email, ingestion_paid, credit_balance_usd) "
+            "VALUES (%s, %s, true, 1000000) ON CONFLICT (id) DO NOTHING",
+            (tid, "local@bookmarkbrain.app"),
         )
         con.commit()
 

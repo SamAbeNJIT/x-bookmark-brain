@@ -54,6 +54,34 @@ def create_checkout_session(
     return session.url
 
 
+def create_payment_session(
+    api_key: str,
+    price_id: str,
+    customer_email: str,
+    client_reference_id: str,
+    success_url: str,
+    cancel_url: str,
+    metadata: dict[str, str],
+) -> str:
+    """Create a one-time (``mode="payment"``) Checkout Session and return its hosted ``url``.
+
+    Used for the prepaid model: a one-off ingestion charge or a credit-pack purchase. ``metadata``
+    (e.g. ``{"kind": "ingestion"}`` or ``{"kind": "credits"}``) is echoed on the completed-session
+    webhook so the app knows what was bought; ``client_reference_id`` links it to the account.
+    """
+    stripe.api_key = api_key
+    session = stripe.checkout.Session.create(
+        mode="payment",
+        line_items=[{"price": price_id, "quantity": 1}],
+        customer_email=customer_email,
+        client_reference_id=client_reference_id,
+        success_url=success_url,
+        cancel_url=cancel_url,
+        metadata=metadata,
+    )
+    return session.url
+
+
 def construct_event(payload: bytes, sig_header: str, webhook_secret: str):
     """Verify a webhook signature and return the parsed Stripe event.
 

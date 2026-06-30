@@ -45,6 +45,25 @@ def _apply_billing_event(con, info: dict) -> None:
     )
 
 
+def _apply_payment_event(con, event: dict) -> bool:
+    """Handle a one-time payment (ingestion charge or credit pack). Returns True if it was a
+    one-time payment we handled (so the caller skips the subscription path)."""
+    if event.get("type") != "checkout.session.completed":
+        return False
+    obj = event.get("data", {}).get("object", {})
+    if obj.get("mode") != "payment":
+        return False  # subscription checkout — not ours
+    account_id = obj.get("client_reference_id")
+    kind = (obj.get("metadata") or {}).get("kind")
+    if account_id and kind == "ingestion":
+        storage.set_ingestion_paid(con, account_id, True)
+    elif account_id and kind == "credits":
+        amount = (obj.get("amount_total") or 0) / 100.0  # cents → USD; credits are 1:1 with $ paid
+        if amount > 0:
+            storage.add_credits(con, account_id, amount)
+    return True
+
+
 class Category(BaseModel):
     name: str
     definition: str | None = None
@@ -112,7 +131,7 @@ def create_app() -> FastAPI:
         email = storage.get_account_email(con, account_id) or "unknown"
         return authui.account_page(email)
 
-    # --- billing (Stripe subscription) ---
+    # --- billing (prepaid credits + one-time ingestion charge) ---
     def _current_account(request: Request, cfg: Config) -> str:
         token = request.cookies.get(SESSION_COOKIE)
         return (auth.verify_session_token(token, cfg.session_secret) if token else None) or cfg.tenant_id
@@ -120,40 +139,50 @@ def create_app() -> FastAPI:
     @app.get("/ui/billing")
     def billing_page_route(request: Request, con=Depends(get_db)):
         cfg = Config.from_env()
-        b = storage.get_account_billing(con, _current_account(request, cfg))
-        spend = storage.usage_this_month(con)
-        if b["plan"] == "pro":
-            body = (f'<div class="answer">✓ <b>Pro</b> — subscription '
-                    f'{esc(b.get("subscription_status") or "active")}.</div>'
-                    f"<p class=muted>Month-to-date AI spend: ${spend:.4f}.</p>")
+        bal = storage.credit_balance(con)
+        ingested = storage.is_ingestion_paid(con)
+        asks = int(bal / cfg.ask_price_usd) if cfg.ask_price_usd else 0
+        body = (f'<div class="answer"><b>Credit balance: ${bal:.2f}</b> '
+                f"(~{asks} questions at ${cfg.ask_price_usd:.2f} each).</div>")
+        if not ingested:
+            if cfg.stripe_secret_key and cfg.stripe_ingest_price_id:
+                body += ("<p class=lead>Import your X bookmarks to get started.</p>"
+                         '<form method=post action="/billing/checkout">'
+                         '<input type=hidden name=kind value="ingestion">'
+                         f"<button>Import my bookmarks — ${cfg.ingestion_price_usd:.2f}</button></form>")
+            else:
+                body += "<p class=muted>Ingestion checkout isn't configured.</p>"
         else:
-            configured = bool(cfg.stripe_secret_key and cfg.stripe_price_id)
-            body = ("<p class=lead>You're on the <b>Free</b> plan.</p>"
-                    f"<p class=muted>Month-to-date AI spend: ${spend:.4f}.</p>")
-            body += ('<form method=post action="/billing/checkout">'
-                     "<button>Upgrade to Pro — $9/mo</button></form>"
-                     if configured else "<p class=muted>Billing isn't configured.</p>")
+            body += "<p class=muted>✓ Bookmarks imported.</p>"
+        if cfg.stripe_secret_key and cfg.stripe_credit_price_id:
+            body += ('<form method=post action="/billing/checkout" style="margin-top:1rem">'
+                     '<input type=hidden name=kind value="credits">'
+                     "<button>Buy credits</button></form>")
+        else:
+            body += "<p class=muted>Credit purchase isn't configured.</p>"
         return page("Billing", body)
 
     @app.post("/billing/checkout")
-    def checkout_route(request: Request, con=Depends(get_db)):
+    def checkout_route(request: Request, kind: str = Form("credits"), con=Depends(get_db)):
         cfg = Config.from_env()
-        if not (cfg.stripe_secret_key and cfg.stripe_price_id):
+        price_id = cfg.stripe_ingest_price_id if kind == "ingestion" else cfg.stripe_credit_price_id
+        if not (cfg.stripe_secret_key and price_id):
             return RedirectResponse("/ui/billing", status_code=303)
         account_id = _current_account(request, cfg)
         email = storage.get_account_email(con, account_id) or "local@bookmarkbrain.app"
         base = str(request.base_url).rstrip("/")
-        url = billing.create_checkout_session(
-            api_key=cfg.stripe_secret_key, price_id=cfg.stripe_price_id,
+        url = billing.create_payment_session(
+            api_key=cfg.stripe_secret_key, price_id=price_id,
             customer_email=email, client_reference_id=account_id,
             success_url=base + "/billing/success", cancel_url=base + "/ui/billing",
+            metadata={"kind": kind, "account_id": account_id},
         )
         return RedirectResponse(url, status_code=303)
 
     @app.get("/billing/success")
     def billing_success_route():
-        return page("Billing", '<div class="answer">🎉 Thanks! Your subscription is activating '
-                    "— it'll show as <b>Pro</b> here in a moment.</div>"
+        return page("Billing", '<div class="answer">🎉 Thanks! Your purchase is being applied — '
+                    "your balance / import status updates here in a moment.</div>"
                     '<p><a href="/ui/billing">Back to billing</a></p>')
 
     @app.post("/billing/webhook")
@@ -165,15 +194,16 @@ def create_app() -> FastAPI:
             billing.construct_event(payload, sig, cfg.stripe_webhook_secret)  # verify signature
         except Exception:
             return Response(status_code=400)  # bad signature / malformed → reject
-        # Pass the parsed payload (plain dict) to summarize_event: a real stripe Event object
-        # intercepts attribute access, so its .get() calls raise. The signature is already verified.
-        info = billing.summarize_event(json.loads(payload))
-        if info:
-            con = connect(cfg.database_url, cfg.tenant_id)  # owner; accounts is not RLS-scoped
-            try:
-                _apply_billing_event(con, info)
-            finally:
-                con.close()
+        # Use the parsed payload (a real stripe Event object intercepts .get()); signature is verified.
+        event = json.loads(payload)
+        con = connect(cfg.database_url, cfg.tenant_id)  # owner; accounts is not RLS-scoped
+        try:
+            if not _apply_payment_event(con, event):          # one-time (ingestion / credits)?
+                info = billing.summarize_event(event)          # else subscription lifecycle
+                if info:
+                    _apply_billing_event(con, info)
+        finally:
+            con.close()
         return {"received": True}
 
     # --- search (#4) ---
