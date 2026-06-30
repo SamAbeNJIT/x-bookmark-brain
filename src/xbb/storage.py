@@ -216,6 +216,24 @@ def set_state(con: psycopg.Connection, key: str, value: str | None) -> None:
     con.commit()
 
 
+def get_or_create_account(con: psycopg.Connection, email: str) -> str:
+    """Return the account id for an email, creating the account on first sign-in. (No RLS on
+    accounts — it's the tenant registry, queried by email before a tenant is known.)"""
+    row = con.execute("SELECT id FROM accounts WHERE email = %s", (email,)).fetchone()
+    if row:
+        return str(row[0])
+    row = con.execute(
+        "INSERT INTO accounts (email) VALUES (%s) RETURNING id", (email,)
+    ).fetchone()
+    con.commit()
+    return str(row[0])
+
+
+def get_account_email(con: psycopg.Connection, account_id: str) -> str | None:
+    row = con.execute("SELECT email FROM accounts WHERE id = %s", (account_id,)).fetchone()
+    return row[0] if row else None
+
+
 def get_sync_cursor(con: psycopg.Connection) -> str | None:
     """The saved bookmarks pagination cursor to resume from, or None (never started / done)."""
     return get_state(con, "bookmarks_cursor")

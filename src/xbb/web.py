@@ -7,12 +7,14 @@ now the routes return JSON.
 
 from __future__ import annotations
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Form, Request
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from . import categorize
+from . import auth, authui, categorize, storage
 from .ask import ask
-from .deps import get_ai, get_db
+from .config import Config
+from .deps import SESSION_COOKIE, get_ai, get_db
 from .search import index_posts, search
 from .webui import ui_router
 
@@ -41,6 +43,49 @@ def create_app() -> FastAPI:
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    # --- auth (magic-link sign in) ---
+    @app.get("/login")
+    def login_page_route():
+        return authui.login_page()
+
+    @app.post("/auth/request")
+    def auth_request_route(request: Request, email: str = Form(...)):
+        cfg = Config.from_env()
+        token = auth.make_login_token(email, cfg.session_secret)
+        link = str(request.base_url).rstrip("/") + "/auth/verify?token=" + token
+        # Dev: log the link (email delivery via SES lands with the deploy step).
+        print(f"[auth] magic link for {email}: {link}", flush=True)
+        return authui.check_email_page(email)
+
+    @app.get("/auth/verify")
+    def auth_verify_route(token: str, con=Depends(get_db)):
+        cfg = Config.from_env()
+        email = auth.verify_login_token(token, cfg.session_secret)
+        if not email:
+            return authui.login_page(error="That sign-in link is invalid or expired.")
+        account_id = storage.get_or_create_account(con, email)
+        session = auth.make_session_token(account_id, cfg.session_secret)
+        resp = RedirectResponse("/", status_code=303)
+        resp.set_cookie(SESSION_COOKIE, session, httponly=True, samesite="lax",
+                        max_age=auth.SESSION_MAX_AGE_S)
+        return resp
+
+    @app.post("/auth/logout")
+    def auth_logout_route():
+        resp = RedirectResponse("/login", status_code=303)
+        resp.delete_cookie(SESSION_COOKIE)
+        return resp
+
+    @app.get("/ui/account")
+    def account_route(request: Request, con=Depends(get_db)):
+        cfg = Config.from_env()
+        token = request.cookies.get(SESSION_COOKIE)
+        account_id = auth.verify_session_token(token, cfg.session_secret) if token else None
+        if not account_id:
+            return RedirectResponse("/login", status_code=303)
+        email = storage.get_account_email(con, account_id) or "unknown"
+        return authui.account_page(email)
 
     # --- search (#4) ---
     @app.get("/search")

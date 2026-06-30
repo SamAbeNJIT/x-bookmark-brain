@@ -7,20 +7,35 @@ endpoints are testable without live X/AWS access.
 
 from __future__ import annotations
 
+from fastapi import Request
+
+from . import auth
 from .ai import AIClient, BedrockAIClient
 from .config import Config
 from .storage import connect
+
+SESSION_COOKIE = "xbb_session"
 
 
 def get_config() -> Config:
     return Config.from_env()
 
 
-def get_db():
+def resolve_tenant(request: Request, cfg: Config) -> str:
+    """The signed-in account's id (= its tenant), or the default single-user tenant if none."""
+    token = request.cookies.get(SESSION_COOKIE)
+    if token:
+        account_id = auth.verify_session_token(token, cfg.session_secret)
+        if account_id:
+            return account_id
+    return cfg.tenant_id
+
+
+def get_db(request: Request):
     # The web app connects as the restricted role so RLS is enforced (admin paths use the owner
-    # DSN). tenant_id is the single default today; auth will resolve it per request.
+    # DSN). The tenant is resolved per request from the session cookie.
     cfg = Config.from_env()
-    con = connect(cfg.app_database_url, cfg.tenant_id)
+    con = connect(cfg.app_database_url, resolve_tenant(request, cfg))
     try:
         yield con
     finally:

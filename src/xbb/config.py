@@ -32,6 +32,11 @@ class Config:
     app_database_url: str | None
     tenant_id: str
 
+    # Auth: secret for signing magic-link/session tokens; require_auth gates the app behind login
+    # (off locally → no session falls back to the single default tenant; on for hosted/multi-user).
+    session_secret: str
+    require_auth: bool
+
     @classmethod
     def from_env(cls) -> "Config":
         return cls(
@@ -44,4 +49,6 @@ class Config:
             database_url=os.getenv("DATABASE_URL"),
             app_database_url=os.getenv("APP_DATABASE_URL") or os.getenv("DATABASE_URL"),
             tenant_id=os.getenv("XBB_TENANT_ID", DEFAULT_TENANT_ID),
+            session_secret=os.getenv("SESSION_SECRET", "dev-insecure-secret-change-me"),
+            require_auth=os.getenv("REQUIRE_AUTH", "").lower() in ("1", "true", "yes"),
         )
