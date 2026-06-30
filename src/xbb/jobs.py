@@ -39,11 +39,12 @@ def _run(cfg: Config, tenant_id: str) -> None:
     from . import categorize, storage, usage, xapi
     from .ai import BedrockAIClient
     from .search import index_posts
-    from .storage import connect, init_db
+    from .storage import connect
 
     con = None
     try:
-        init_db(cfg.database_url, tenant_id)            # owner: ensure schema (idempotent)
+        # NB: schema is provisioned at deploy/migration time — NEVER run init_db (table-locking
+        # DDL) in the request/sync path; it deadlocks against the request's own open transaction.
         con = connect(cfg.app_database_url, tenant_id)  # restricted role: RLS-scoped to this tenant
 
         _set(step="backfill", detail="fetching new bookmarks from X…")
@@ -97,8 +98,7 @@ def start(tenant_id: str | None = None) -> bool:
              error="X_CLIENT_ID is not set in .env.", finished_at=time.time())
         return False
     from . import xapi
-    from .storage import connect, init_db
-    init_db(cfg.database_url, tid)
+    from .storage import connect
     _c = connect(cfg.app_database_url, tid)
     try:
         connected = xapi.is_connected(_c)
