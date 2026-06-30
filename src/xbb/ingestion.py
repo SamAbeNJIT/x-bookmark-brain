@@ -1,11 +1,9 @@
-"""Ingestion seam: pull the user's bookmarks from X and parse them into records.
+"""Ingestion helpers: parse raw bookmark payloads into records and upsert them.
 
-`XClient` is the single seam wrapping X's internal GraphQL bookmarks endpoint. Tests feed
-recorded sample payloads (a reply, a quote, a self-thread) to `parse_bookmark` and assert
-the records produced — no live X calls in tests (see docs/PRD.md -> Testing Decisions).
-
-`GraphQLXClient` is the live implementation of that seam: it authenticates with the user's
-own session cookies (auth_token + ct0) and pages through X's internal Bookmarks endpoint.
+Live X ingestion now goes through the sanctioned OAuth v2 API in `xapi.py`. This module keeps
+the pure, network-free pieces it reuses: `parse_bookmark` (legacy internal-GraphQL shape,
+exercised by the test suite), `_upsert_post`/`_upsert_author` (the generic record → DB upsert,
+reused by `xapi`), and `run_backfill` (generic page-and-upsert loop with resume, used by tests).
 """
 
 from __future__ import annotations
@@ -15,58 +13,6 @@ import time
 from typing import Any, Iterator, Protocol
 
 from . import storage
-
-# X web app's public bearer token (same value the browser uses for unauthed-app GraphQL).
-WEB_BEARER = (
-    "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D"
-    "1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
-)
-
-# Default GraphQL feature flags captured from a logged-in web session. X rotates these; if a
-# request 400s complaining about a missing feature, recapture from DevTools and pass `features`.
-DEFAULT_FEATURES: dict[str, bool] = {
-    "rweb_video_screen_enabled": False,
-    "rweb_cashtags_enabled": True,
-    "profile_label_improvements_pcf_label_in_post_enabled": True,
-    "responsive_web_profile_redirect_enabled": False,
-    "rweb_tipjar_consumption_enabled": False,
-    "verified_phone_label_enabled": False,
-    "creator_subscriptions_tweet_preview_api_enabled": True,
-    "responsive_web_graphql_timeline_navigation_enabled": True,
-    "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
-    "premium_content_api_read_enabled": False,
-    "communities_web_enable_tweet_community_results_fetch": True,
-    "c9s_tweet_anatomy_moderator_badge_enabled": True,
-    "responsive_web_grok_analyze_button_fetch_trends_enabled": False,
-    "responsive_web_grok_analyze_post_followups_enabled": True,
-    "rweb_cashtags_composer_attachment_enabled": True,
-    "responsive_web_jetfuel_frame": True,
-    "responsive_web_grok_share_attachment_enabled": True,
-    "responsive_web_grok_annotations_enabled": True,
-    "articles_preview_enabled": True,
-    "responsive_web_edit_tweet_api_enabled": True,
-    "rweb_conversational_replies_downvote_enabled": False,
-    "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
-    "view_counts_everywhere_api_enabled": True,
-    "longform_notetweets_consumption_enabled": True,
-    "responsive_web_twitter_article_tweet_consumption_enabled": True,
-    "content_disclosure_indicator_enabled": True,
-    "content_disclosure_ai_generated_indicator_enabled": True,
-    "responsive_web_grok_show_grok_translated_post": True,
-    "responsive_web_grok_analysis_button_from_backend": True,
-    "post_ctas_fetch_enabled": False,
-    "freedom_of_speech_not_reach_fetch_enabled": True,
-    "standardized_nudges_misinfo": True,
-    "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": True,
-    "longform_notetweets_rich_text_read_enabled": True,
-    "longform_notetweets_inline_media_enabled": False,
-    "responsive_web_grok_image_annotation_enabled": True,
-    "responsive_web_grok_imagine_annotation_enabled": True,
-    "responsive_web_grok_community_note_auto_translation_is_enabled": True,
-    "responsive_web_enhance_cards_enabled": False,
-}
-
-DEFAULT_QUERY_ID = "i8QZ1qqy36ffA3bxfTaf7w"
 
 
 class XClient(Protocol):
@@ -207,137 +153,6 @@ def parse_bookmark(raw: dict[str, Any]) -> dict[str, Any]:
         "repost_count": legacy.get("retweet_count"),
         "raw": raw,
     }
-
-
-# --------------------------------------------------------------------------- live client
-
-
-class GraphQLXClient:
-    """Live `XClient` over X's internal GraphQL Bookmarks endpoint, authenticated by cookies."""
-
-    def __init__(
-        self,
-        auth_token: str,
-        csrf_token: str,
-        query_id: str = DEFAULT_QUERY_ID,
-        features: dict[str, bool] | None = None,
-        count: int = 20,
-        page_pause_s: float = 0.7,
-        start_cursor: str | None = None,
-    ) -> None:
-        if not auth_token or not csrf_token:
-            raise ValueError("auth_token and csrf_token (ct0) are required")
-        self.auth_token = auth_token
-        self.csrf_token = csrf_token
-        self.query_id = query_id
-        self.features = features or DEFAULT_FEATURES
-        self.count = count
-        self.page_pause_s = page_pause_s
-        # Resume support: begin paging from `start_cursor`, and expose `cursor` as the live
-        # position so a backfill can persist it and continue after a rate-limit. `cursor`
-        # becomes None once the timeline is fully paged (the genuine end).
-        self.start_cursor = start_cursor
-        self.cursor: str | None = start_cursor
-
-    @property
-    def _url(self) -> str:
-        return f"https://x.com/i/api/graphql/{self.query_id}/Bookmarks"
-
-    @property
-    def _headers(self) -> dict[str, str]:
-        return {
-            "authorization": f"Bearer {WEB_BEARER}",
-            "x-csrf-token": self.csrf_token,
-            "x-twitter-active-user": "yes",
-            "x-twitter-auth-type": "OAuth2Session",
-            "x-twitter-client-language": "en",
-            "content-type": "application/json",
-            "accept": "*/*",
-            "cookie": f"auth_token={self.auth_token}; ct0={self.csrf_token}",
-            "user-agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-            ),
-            "referer": "https://x.com/i/bookmarks",
-            "x-twitter-client-version": "web",
-        }
-
-    def _fetch(self, cursor: str | None) -> dict[str, Any]:
-        import httpx
-
-        variables: dict[str, Any] = {"count": self.count, "includePromotedContent": False}
-        if cursor:
-            variables["cursor"] = cursor
-        params = {
-            "variables": json.dumps(variables, separators=(",", ":")),
-            "features": json.dumps(self.features, separators=(",", ":")),
-        }
-        delay = 30.0
-        for _ in range(6):
-            resp = httpx.get(self._url, headers=self._headers, params=params, timeout=30.0)
-            if resp.status_code == 429:
-                # X bookmarks rate limit (resets on a ~15-min window). Honor Retry-After,
-                # else back off and retry rather than aborting the whole backfill.
-                wait = float(resp.headers.get("retry-after", 0)) or delay
-                time.sleep(min(wait, 300.0))
-                delay = min(delay * 2, 300.0)
-                continue
-            resp.raise_for_status()
-            return resp.json()
-        resp.raise_for_status()  # exhausted retries
-        return resp.json()
-
-    @staticmethod
-    def _split(page: dict[str, Any]) -> tuple[list[dict[str, Any]], str | None]:
-        """Return (tweet entries, next bottom cursor) from a raw GraphQL page."""
-        timeline = (
-            page.get("data", {})
-            .get("bookmark_timeline_v2", {})
-            .get("timeline", {})
-        )
-        tweets: list[dict[str, Any]] = []
-        cursor: str | None = None
-        for inst in timeline.get("instructions", []):
-            if inst.get("type") != "TimelineAddEntries":
-                continue
-            for entry in inst.get("entries", []):
-                content = entry.get("content", {})
-                etype = content.get("entryType")
-                if etype == "TimelineTimelineItem":
-                    if content.get("itemContent", {}).get("itemType") == "TimelineTweet":
-                        tweets.append(entry)
-                elif etype == "TimelineTimelineCursor" and content.get("cursorType") == "Bottom":
-                    cursor = content.get("value")
-        return tweets, cursor
-
-    def iter_bookmark_pages(self) -> Iterator[list[dict[str, Any]]]:
-        cursor: str | None = self.start_cursor
-        self.cursor = cursor
-        seen_cursors: set[str] = set()
-        empties = 0
-        while True:
-            page = self._fetch(cursor)
-            tweets, next_cursor = self._split(page)
-            if tweets:
-                empties = 0
-                if not next_cursor or next_cursor in seen_cursors:
-                    self.cursor = None        # no advance = real end of the timeline
-                else:
-                    seen_cursors.add(next_cursor)
-                    self.cursor = next_cursor  # resume point for the next page
-                yield tweets
-                if self.cursor is None:
-                    break
-                cursor = self.cursor
-                time.sleep(self.page_pause_s)
-            else:
-                # An empty page mid-stream is usually a transient rate-limit, not the
-                # end. Back off and retry the SAME cursor; only stop after several in a
-                # row (sustained empties = genuine end or a hard block).
-                empties += 1
-                if empties >= 4:
-                    break
-                time.sleep(self.page_pause_s * 5)
 
 
 # --------------------------------------------------------------------------- backfill

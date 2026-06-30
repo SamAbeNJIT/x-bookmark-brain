@@ -1,21 +1,19 @@
 """CLI admin actions.
 
-    python -m xbb backfill            # pull your X bookmarks into the local DB (needs X cookies)
-    python -m xbb backfill --resume   # continue a backfill X rate-limited (from the saved cursor)
+    python -m xbb backfill     # pull your X bookmarks via the OAuth API (connect first in the web app)
     python -m xbb index        # embed bookmarks for semantic search (needs Bedrock)
     python -m xbb categorize   # derive a taxonomy (first run) + label bookmarks (needs Bedrock)
 
 `index` and `categorize` are batched and resumable — safe to interrupt and re-run; they
-only process rows that aren't done yet.
+only process rows that aren't done yet. `backfill` requires an X connection (do it once via
+the web app's "Connect X" button — it stores the OAuth token this CLI reuses).
 """
 
 from __future__ import annotations
 
-import os
 import sys
 
 from .config import Config
-from .ingestion import DEFAULT_QUERY_ID, GraphQLXClient, run_backfill
 
 
 def _load_env() -> None:
@@ -47,20 +45,24 @@ def _progress(done: int, total: int) -> None:
 def _backfill() -> int:
     _load_env()
     cfg = Config.from_env()
-    if not cfg.x_auth_token or not cfg.x_csrf_token:
-        print("Missing X_AUTH_TOKEN / X_CSRF_TOKEN in .env", file=sys.stderr)
+    if not cfg.x_client_id:
+        print("X_CLIENT_ID is not set in .env", file=sys.stderr)
         return 2
-    client = GraphQLXClient(
-        auth_token=cfg.x_auth_token,
-        csrf_token=cfg.x_csrf_token,
-        query_id=os.getenv("X_BOOKMARKS_QUERY_ID", DEFAULT_QUERY_ID),
-    )
-    resume = "--resume" in sys.argv
-    where = "resuming from the saved cursor" if resume else "from the top"
-    print(f"Backfilling bookmarks into {cfg.db_path} ({where}) ...")
-    n = run_backfill(client, cfg.db_path, resume=resume)
-    print(f"Done. {n} bookmarks fetched this run (stored in {cfg.db_path}).")
-    print("If X rate-limited mid-run, wait ~15 min and re-run with --resume to continue.")
+    from . import xapi
+    from .storage import connect, init_db
+
+    init_db(cfg.db_path)
+    con = connect(cfg.db_path)
+    try:
+        if not xapi.is_connected(con):
+            print("Not connected to X. Start the web app and click 'Connect X' first "
+                  "(http://127.0.0.1:8000).", file=sys.stderr)
+            return 2
+        print(f"Backfilling bookmarks into {cfg.db_path} via the X API ...")
+        n = xapi.backfill_via_api(con, cfg.x_client_id, incremental=True)
+        print(f"Done. {n} new bookmark(s) stored in {cfg.db_path}.")
+    finally:
+        con.close()
     return 0
 
 

@@ -30,11 +30,11 @@ def test_health_endpoint_returns_ok():
 
 
 def test_config_reads_from_env(monkeypatch):
-    monkeypatch.setenv("X_AUTH_TOKEN", "tok")
+    monkeypatch.setenv("X_CLIENT_ID", "cid")
     monkeypatch.setenv("AWS_REGION", "eu-west-1")
     monkeypatch.setenv("BEDROCK_EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0")
     cfg = Config.from_env()
-    assert cfg.x_auth_token == "tok"
+    assert cfg.x_client_id == "cid"
     assert cfg.aws_region == "eu-west-1"
     assert cfg.bedrock_embedding_model == "amazon.titan-embed-text-v2:0"
 
