@@ -29,9 +29,9 @@ _HAVE_DB = bool(os.environ.get("DATABASE_URL"))
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
-# tenant-owned tables, child-first, so TRUNCATE ... CASCADE order is safe
-_TABLES = ("assignments", "embeddings", "self_thread_posts", "posts",
-           "authors", "categories", "sync_state")
+# All tenant-owned tables (TRUNCATE ... CASCADE handles FK order). Sourced from storage so it
+# can't drift as new tables are added (e.g. usage_events).
+_TABLES = storage._TENANT_TABLES
 
 
 def load(name: str) -> dict:

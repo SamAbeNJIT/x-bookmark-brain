@@ -142,7 +142,10 @@ def create_app() -> FastAPI:
     @app.post("/ask")
     def ask_route(body: AskIn, con=Depends(get_db), ai=Depends(get_ai)):
         cfg = Config.from_env()
-        if not usage.within_quota(storage.usage_this_month(con), cfg.monthly_quota_usd):
+        cap = storage.account_monthly_quota(con)  # per-account cap wins; else the config default
+        if cap is None:
+            cap = cfg.monthly_quota_usd
+        if not usage.within_quota(storage.usage_this_month(con), cap):
             return {"question": body.question, "citations": [], "retrieved": [],
                     "answer": "You've reached your monthly usage limit. It resets next month."}
         return ask(con, ai, body.question, body.k)

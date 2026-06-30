@@ -17,6 +17,7 @@ dependencies = [
     "psycopg-pool",      # connection pooling for the web app
     "pgvector",          # pgvector type adapter for psycopg
     "itsdangerous",      # signed magic-link + session tokens (auth)
+    "stripe",            # subscription billing (checkout + webhooks)
 ]
 
 [project.optional-dependencies]

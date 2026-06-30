@@ -38,7 +38,13 @@ class Config:
     require_auth: bool
 
     # Per-tenant monthly Bedrock spend cap (USD); None = unlimited. Enforced on /ask.
+    # Fallback default — a subscribed account's own accounts.monthly_quota_usd takes precedence.
     monthly_quota_usd: float | None
+
+    # Stripe (subscription billing)
+    stripe_secret_key: str | None
+    stripe_price_id: str | None
+    stripe_webhook_secret: str | None
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -57,4 +63,7 @@ class Config:
             monthly_quota_usd=(
                 float(os.environ["MONTHLY_QUOTA_USD"]) if os.getenv("MONTHLY_QUOTA_USD") else None
             ),
+            stripe_secret_key=os.getenv("STRIPE_SECRET_KEY"),
+            stripe_price_id=os.getenv("STRIPE_PRICE_ID"),
+            stripe_webhook_secret=os.getenv("STRIPE_WEBHOOK_SECRET"),
         )

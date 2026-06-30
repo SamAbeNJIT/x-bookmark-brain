@@ -17,6 +17,7 @@ index; semantic search is a single ``ORDER BY vector <=> query`` in ``search.py`
 from __future__ import annotations
 
 import os
+from typing import Any
 
 import psycopg
 from pgvector.psycopg import register_vector
@@ -42,7 +43,12 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE IF NOT EXISTS accounts (
     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),  -- this id IS the tenant_id
     email      text UNIQUE NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT now()
+    created_at timestamptz NOT NULL DEFAULT now(),
+    plan       text NOT NULL DEFAULT 'free',
+    subscription_status   text,        -- 'active' | 'past_due' | 'canceled' | NULL
+    stripe_customer_id    text,
+    stripe_subscription_id text,
+    monthly_quota_usd     double precision  -- per-account cap; NULL = use the config default
 );
 
 CREATE TABLE IF NOT EXISTS authors (
@@ -175,6 +181,17 @@ def _apply_grants(con: psycopg.Connection) -> None:
     )
 
 
+# Idempotent column adds for tables created before a feature shipped (Postgres ADD COLUMN IF NOT
+# EXISTS). New tables get the columns from SCHEMA; existing ones get them here.
+_MIGRATIONS = (
+    "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS plan text NOT NULL DEFAULT 'free'",
+    "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS subscription_status text",
+    "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS stripe_customer_id text",
+    "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS stripe_subscription_id text",
+    "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS monthly_quota_usd double precision",
+)
+
+
 def init_db(dsn: str, tenant_id: str | None = None) -> None:
     """Create the extension, tables, vector index, RLS policies, grants, default account.
 
@@ -184,6 +201,8 @@ def init_db(dsn: str, tenant_id: str | None = None) -> None:
     with psycopg.connect(dsn) as con:
         con.execute("SELECT set_config('app.current_tenant', %s, false)", (tid,))
         _execscript(con, SCHEMA)
+        for stmt in _MIGRATIONS:
+            con.execute(stmt)
         _apply_rls(con)
         _apply_grants(con)
         # Seed the account row for the default/single-user tenant so its tenant_id is valid.
@@ -242,6 +261,52 @@ def get_or_create_account(con: psycopg.Connection, email: str) -> str:
 def get_account_email(con: psycopg.Connection, account_id: str) -> str | None:
     row = con.execute("SELECT email FROM accounts WHERE id = %s", (account_id,)).fetchone()
     return row[0] if row else None
+
+
+# --------------------------------------------------------------------------- billing / plan
+# accounts has no RLS (it's the tenant registry); the webhook updates rows across tenants.
+
+
+def set_subscription(con: psycopg.Connection, account_id: str, *, plan: str,
+                     subscription_status: str | None, stripe_customer_id: str | None = None,
+                     stripe_subscription_id: str | None = None,
+                     monthly_quota_usd: float | None = None) -> None:
+    """Update an account's plan/subscription state (COALESCE keeps existing Stripe ids if None)."""
+    con.execute(
+        "UPDATE accounts SET plan = %s, subscription_status = %s, "
+        "stripe_customer_id = COALESCE(%s, stripe_customer_id), "
+        "stripe_subscription_id = COALESCE(%s, stripe_subscription_id), "
+        "monthly_quota_usd = %s WHERE id = %s",
+        (plan, subscription_status, stripe_customer_id, stripe_subscription_id,
+         monthly_quota_usd, account_id),
+    )
+    con.commit()
+
+
+def account_by_stripe_customer(con: psycopg.Connection, customer_id: str) -> str | None:
+    row = con.execute(
+        "SELECT id FROM accounts WHERE stripe_customer_id = %s", (customer_id,)
+    ).fetchone()
+    return str(row[0]) if row else None
+
+
+def get_account_billing(con: psycopg.Connection, account_id: str) -> dict[str, Any]:
+    row = con.execute(
+        "SELECT plan, subscription_status, monthly_quota_usd FROM accounts WHERE id = %s",
+        (account_id,),
+    ).fetchone()
+    if not row:
+        return {"plan": "free", "subscription_status": None, "monthly_quota_usd": None}
+    return {"plan": row[0], "subscription_status": row[1], "monthly_quota_usd": row[2]}
+
+
+def account_monthly_quota(con: psycopg.Connection) -> float | None:
+    """The current tenant's per-account spend cap (USD), or None if unset (use config default)."""
+    row = con.execute(
+        "SELECT monthly_quota_usd FROM accounts "
+        "WHERE id = current_setting('app.current_tenant', true)::uuid"
+    ).fetchone()
+    return float(row[0]) if row and row[0] is not None else None
 
 
 # --------------------------------------------------------------------------- usage metering
