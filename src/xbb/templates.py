@@ -226,7 +226,7 @@ _SIDEBAR = (
         for href, label, ic in _NAV_ITEMS
     )
     + "</nav>"
-    '<div class="side-foot">local · private · AI-searched</div>'
+    '<div class="side-foot">private · AI-searched</div>'
     "</aside>"
 )
 
