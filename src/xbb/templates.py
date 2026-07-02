@@ -150,13 +150,19 @@ _STYLE = """
   .answer p { margin: 0 0 .7rem; white-space: normal; }
   .answer p:last-child { margin-bottom: 0; }
 
-  /* ask results: sticky answer left, sources scrolling right */
-  .ask-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; align-items: start; }
+  /* ask results: sticky answer left (narrower), sources get the wider right side */
+  .ask-cols { display: grid; grid-template-columns: 2fr 3fr; gap: 1.2rem; align-items: start; }
   .ask-left { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow-y: auto; }
   .ask-left .answer { margin: 0; max-width: none; white-space: normal; }
   .ask-right h3 { margin-top: 0; }
   @media (max-width: 900px) { .ask-cols { grid-template-columns: 1fr; }
     .ask-left { position: static; max-height: none; } }
+
+  /* long tweets collapse; tap to expand */
+  .post .body.clamp { display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical;
+                      overflow: hidden; }
+  .post a.more { display: inline-block; margin-top: .35rem; font-size: .82rem;
+                 color: var(--accent); text-decoration: none; font-weight: 600; }
 
   /* stats */
   .stats { display: flex; gap: .7rem; flex-wrap: wrap; margin: 0 0 1.4rem; }
@@ -253,6 +259,20 @@ _ACTIVE_JS = (
 # Row-major masonry: distribute cards (in DOM/chronological order) into the shortest column,
 # so the top row is the newest items left-to-right and columns pack with no gaps. Exposes
 # window.__masonryAdd(container, html) for the feed's infinite scroll to append more.
+# Collapse long tweet bodies to 8 lines with a Show more/less toggle. Runs BEFORE the masonry
+# script (order in page()) so column heights are measured on the clamped cards.
+_CLAMP_JS = (
+    "<script>window.__clampCards=function(root){"
+    "(root||document).querySelectorAll('.post .body:not([data-clamped])').forEach(function(b){"
+    "b.setAttribute('data-clamped','1');b.classList.add('clamp');"
+    "if(b.scrollHeight<=b.clientHeight+2){b.classList.remove('clamp');return;}"
+    "var t=document.createElement('a');t.href='javascript:void(0)';t.className='more';"
+    "t.textContent='Show more';"
+    "t.onclick=function(){var c=b.classList.toggle('clamp');"
+    "t.textContent=c?'Show more':'Show less';};"
+    "b.after(t);});};window.__clampCards();</script>"
+)
+
 _MASONRY_JS = (
     "<script>(function(){"
     "function nCols(c){var w=c.clientWidth||c.offsetWidth||0;return Math.max(1,Math.floor((w+14)/354));}"
@@ -271,7 +291,8 @@ _MASONRY_JS = (
     "var mx=0;c.querySelectorAll('.post').forEach(function(x){var o=x.getAttribute('data-ord');if(o!==null)mx=Math.max(mx,+o+1);});"
     "var t=document.createElement('div');t.innerHTML=html;"
     "Array.prototype.slice.call(t.querySelectorAll('.post')).forEach(function(card){"
-    "card.setAttribute('data-ord',mx++);shortest(c).appendChild(card);});};"
+    "card.setAttribute('data-ord',mx++);shortest(c).appendChild(card);});"
+    "if(window.__clampCards)__clampCards(c);};"
     "layout();window.addEventListener('load',layout);"
     "var tid;window.addEventListener('resize',function(){clearTimeout(tid);tid=setTimeout(layout,150);});"
     "})();</script>"
@@ -304,7 +325,7 @@ def page(title: str, body: str) -> HTMLResponse:
         "<meta name=viewport content='width=device-width, initial-scale=1'>"
         f"<title>{esc(title)} · bookmark-brain</title>{_HEAD}{_STYLE}</head>"
         f"<body>{_SIDEBAR}<main class=\"content\"><div class=\"wrap\">"
-        f"<h1>{esc(title)}</h1>{body}</div></main>{_ACTIVE_JS}{_MASONRY_JS}</body></html>"
+        f"<h1>{esc(title)}</h1>{body}</div></main>{_ACTIVE_JS}{_CLAMP_JS}{_MASONRY_JS}</body></html>"
     )
 
 
