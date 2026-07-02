@@ -88,6 +88,7 @@ _STYLE = """
   /* content */
   .content { margin-left: 224px; flex: 1; padding: 2.4rem clamp(1.2rem, 4vw, 3.5rem) 5rem; }
   .wrap { max-width: 1320px; margin: 0 auto; }
+  .wrap.wide { max-width: 1920px; }  /* results pages stretch to the screen */
   /* reading-width blocks stay comfortable even on huge screens */
   .narrow { max-width: 720px; }
   /* card lists: JS distributes cards into the shortest column in order, so they read
@@ -150,8 +151,9 @@ _STYLE = """
   .answer p { margin: 0 0 .7rem; white-space: normal; }
   .answer p:last-child { margin-bottom: 0; }
 
-  /* ask results: sticky answer left (narrower), sources get the wider right side */
-  .ask-cols { display: grid; grid-template-columns: 2fr 3fr; gap: 1.2rem; align-items: start; }
+  /* ask results: answer keeps a comfortable reading width; tweets absorb ALL remaining space */
+  .ask-cols { display: grid; grid-template-columns: minmax(380px, 56ch) 1fr;
+              gap: 1.4rem; align-items: start; }
   .ask-left { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow-y: auto; }
   .ask-left .answer { margin: 0; max-width: none; white-space: normal; }
   .ask-right h3 { margin-top: 0; }
@@ -319,12 +321,13 @@ def md_lite(text: str | None) -> str:
     return "".join(out)
 
 
-def page(title: str, body: str) -> HTMLResponse:
+def page(title: str, body: str, wide: bool = False) -> HTMLResponse:
+    wrap = "wrap wide" if wide else "wrap"
     return HTMLResponse(
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width, initial-scale=1'>"
         f"<title>{esc(title)} · bookmark-brain</title>{_HEAD}{_STYLE}</head>"
-        f"<body>{_SIDEBAR}<main class=\"content\"><div class=\"wrap\">"
+        f"<body>{_SIDEBAR}<main class=\"content\"><div class=\"{wrap}\">"
         f"<h1>{esc(title)}</h1>{body}</div></main>{_ACTIVE_JS}{_CLAMP_JS}{_MASONRY_JS}</body></html>"
     )
 

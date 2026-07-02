@@ -234,7 +234,7 @@ def ui_ask_post(question: str = Form(...), con=Depends(get_db), ai=Depends(get_a
         )
     else:
         body = answer
-    return page("Ask", form + body)
+    return page("Ask", form + body, wide=bool(retrieved))
 
 
 @ui_router.get("/ui/categories")
