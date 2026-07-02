@@ -15,7 +15,7 @@ from . import categorize, credits, jobs, storage, xapi, xauth
 from .config import Config
 from .deps import get_ai, get_db, resolve_tenant
 from .search import search
-from .templates import esc, legend, page, parent_color, post_card
+from .templates import esc, legend, md_lite, page, parent_color, post_card
 
 ui_router = APIRouter()
 
@@ -220,15 +220,21 @@ def ui_ask_post(question: str = Form(...), con=Depends(get_db), ai=Depends(get_a
         return html
 
     cards = "".join(_card(p) for p in retrieved)
-    answer = f'<div class="answer">{esc(result.get("answer") or "")}</div>'
-    sources = (
-        f'<h3>{len(retrieved)} related bookmarks '
-        f'<span class=muted>({len(cited)} cited in the answer)</span></h3>'
-        f'<div class="cards">{cards}</div>'
-        if retrieved
-        else ""
-    )
-    return page("Ask", form + answer + sources)
+    answer = f'<div class="answer">{md_lite(result.get("answer"))}</div>'
+    if retrieved:
+        # Two-pane: the answer sticks on the left while the source bookmarks scroll on the right.
+        body = (
+            '<div class="ask-cols">'
+            f'<div class="ask-left">{answer}</div>'
+            '<div class="ask-right">'
+            f'<h3>{len(retrieved)} related bookmarks '
+            f'<span class=muted>({len(cited)} cited in the answer)</span></h3>'
+            f'<div class="cards">{cards}</div>'
+            "</div></div>"
+        )
+    else:
+        body = answer
+    return page("Ask", form + body)
 
 
 @ui_router.get("/ui/categories")

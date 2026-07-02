@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from typing import Any
 from urllib.parse import quote
 
@@ -146,6 +147,16 @@ _STYLE = """
             border-left: 4px solid var(--accent); padding: 1.1rem 1.2rem; border-radius: 12px;
             margin: 1.2rem 0; max-width: 760px; box-shadow: var(--shadow); white-space: pre-wrap;
             font-size: .98rem; }
+  .answer p { margin: 0 0 .7rem; white-space: normal; }
+  .answer p:last-child { margin-bottom: 0; }
+
+  /* ask results: sticky answer left, sources scrolling right */
+  .ask-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; align-items: start; }
+  .ask-left { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow-y: auto; }
+  .ask-left .answer { margin: 0; max-width: none; white-space: normal; }
+  .ask-right h3 { margin-top: 0; }
+  @media (max-width: 900px) { .ask-cols { grid-template-columns: 1fr; }
+    .ask-left { position: static; max-height: none; } }
 
   /* stats */
   .stats { display: flex; gap: .7rem; flex-wrap: wrap; margin: 0 0 1.4rem; }
@@ -269,6 +280,22 @@ _MASONRY_JS = (
 
 def esc(value: Any) -> str:
     return html.escape(str(value)) if value is not None else ""
+
+
+def md_lite(text: str | None) -> str:
+    """Render the small markdown subset LLM answers use (**bold**, *italic*, bullets,
+    paragraphs) to HTML. Escapes FIRST, so model output can never inject markup."""
+    s = esc(text or "")
+    s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s, flags=re.DOTALL)
+    s = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<i>\1</i>", s)
+    out = []
+    for para in s.split("\n\n"):
+        if not para.strip():
+            continue
+        lines = [("• " + ln.lstrip()[2:] if ln.lstrip().startswith(("- ", "* ")) else ln)
+                 for ln in para.split("\n")]
+        out.append("<p>" + "<br>".join(lines) + "</p>")
+    return "".join(out)
 
 
 def page(title: str, body: str) -> HTMLResponse:
