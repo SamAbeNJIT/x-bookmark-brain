@@ -211,13 +211,17 @@ def create_app() -> FastAPI:
 
         # --- credits: custom one-time + subscription ---
         if cfg.stripe_secret_key:
+            per_dollar = int(round(1 / cfg.ask_price_usd)) if cfg.ask_price_usd else 0
             body += (
-                '<div style="margin-top:1.4rem"><b>Top up credits</b> ($1 = $1 of questions)'
+                f'<div style="margin-top:1.4rem"><b>Top up credits</b> — $1 buys {per_dollar} questions'
                 '<form method=post action="/billing/checkout" class=row style="margin-top:.4rem">'
                 '<input type=hidden name=kind value="credits">'
                 f'<input type=number name=amount min={pricing.MIN_CREDIT_TOPUP_USD:.0f} '
                 f'max={pricing.MAX_CREDIT_TOPUP_USD:.0f} step=1 value=10 '
-                'style="width:6rem;padding:.5rem;border-radius:8px;border:1px solid var(--line-2)"> '
+                'style="width:6rem;padding:.5rem;border-radius:8px;border:1px solid var(--line-2)" '
+                "oninput=\"document.getElementById('topup_q').textContent="
+                f"Math.round(this.value*{per_dollar})\"> "
+                f'<span class=muted>= <b id=topup_q>{10 * per_dollar}</b> questions</span> '
                 "<button>Buy credits</button></form></div>"
             )
             if cfg.stripe_credit_sub_price_id:
