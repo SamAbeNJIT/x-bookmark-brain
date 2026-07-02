@@ -93,11 +93,12 @@ def oauth_callback(code: str = "", state: str = "", error: str = "", con=Depends
 @ui_router.post("/ui/refresh")
 def ui_refresh_start(request: Request, con=Depends(get_db)):
     cfg = Config.from_env()
-    # Freemium ingestion gate: unpaid accounts may sync while under the free slice (the backfill
-    # itself caps at cfg.free_bookmark_limit); once the slice is full, upgrade to import the rest.
-    if not storage.is_ingestion_paid(con):
+    # Import gate: sync is allowed while the account is under its entitlement (free slice +
+    # purchased import_limit; None = unlimited). At the cap, send them to the billing slider.
+    cap = storage.effective_import_cap(con, cfg.free_bookmark_limit)
+    if cap is not None:
         n = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
-        if n >= cfg.free_bookmark_limit:
+        if n >= cap:
             return RedirectResponse(url="/ui/billing", status_code=303)
     jobs.start(resolve_tenant(request, cfg))  # sync runs under THIS user's tenant
     return RedirectResponse(url="/ui/refresh", status_code=303)

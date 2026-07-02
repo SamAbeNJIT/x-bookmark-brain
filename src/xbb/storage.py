@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS accounts (
     stripe_subscription_id text,
     monthly_quota_usd     double precision, -- per-account cap; NULL = use the config default
     credit_balance_usd    double precision NOT NULL DEFAULT 0,   -- prepaid credits, drawn down by asks
-    ingestion_paid        boolean NOT NULL DEFAULT false         -- one-time ingestion charge settled?
+    ingestion_paid        boolean NOT NULL DEFAULT false,        -- legacy/comped: TRUE = unlimited import
+    import_limit          integer NOT NULL DEFAULT 0             -- purchased entitlement beyond the free slice
 );
 
 CREATE TABLE IF NOT EXISTS authors (
@@ -193,6 +194,7 @@ _MIGRATIONS = (
     "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS monthly_quota_usd double precision",
     "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS credit_balance_usd double precision NOT NULL DEFAULT 0",
     "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS ingestion_paid boolean NOT NULL DEFAULT false",
+    "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS import_limit integer NOT NULL DEFAULT 0",
 )
 
 
@@ -401,6 +403,41 @@ def refund_credits(con: psycopg.Connection, amount_usd: float) -> None:
         (amount_usd,),
     )
     con.commit()
+
+
+def import_limit(con: psycopg.Connection) -> int:
+    """The current tenant's PURCHASED import entitlement (bookmarks beyond the free slice)."""
+    row = con.execute(
+        "SELECT import_limit FROM accounts "
+        "WHERE id = current_setting('app.current_tenant', true)::uuid"
+    ).fetchone()
+    return int(row[0]) if row and row[0] is not None else 0
+
+
+def add_import_limit(con: psycopg.Connection, account_id: str, n: int) -> None:
+    """Raise an account's purchased import entitlement by n bookmarks (from a paid checkout)."""
+    con.execute(
+        "UPDATE accounts SET import_limit = import_limit + %s WHERE id = %s", (n, account_id)
+    )
+    con.commit()
+
+
+def reduce_import_limit(con: psycopg.Connection, n: int) -> None:
+    """Shrink the current tenant's purchased entitlement (unused capacity → credits conversion)."""
+    con.execute(
+        "UPDATE accounts SET import_limit = GREATEST(import_limit - %s, 0) "
+        "WHERE id = current_setting('app.current_tenant', true)::uuid",
+        (n,),
+    )
+    con.commit()
+
+
+def effective_import_cap(con: psycopg.Connection, free_limit: int) -> int | None:
+    """Total bookmarks this tenant may store: None = unlimited (comped/legacy ingestion_paid),
+    else the free slice + purchased entitlement."""
+    if is_ingestion_paid(con):
+        return None
+    return free_limit + import_limit(con)
 
 
 def is_ingestion_paid(con: psycopg.Connection) -> bool:

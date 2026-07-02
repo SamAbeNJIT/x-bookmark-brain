@@ -118,7 +118,8 @@ def db() -> str:
         con.execute(f"TRUNCATE {t} CASCADE")
     # Fund the default account so route tests pass the credit gate; credit tests set their own.
     con.execute(
-        "UPDATE accounts SET credit_balance_usd = 100, ingestion_paid = true WHERE id = %s",
+        "UPDATE accounts SET credit_balance_usd = 100, ingestion_paid = true, import_limit = 0 "
+        "WHERE id = %s",
         (DEFAULT_TENANT_ID,),
     )
     con.commit()

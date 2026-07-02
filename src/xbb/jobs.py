@@ -48,16 +48,35 @@ def _run(cfg: Config, tenant_id: str) -> None:
         con = connect(cfg.app_database_url, tenant_id)  # restricted role: RLS-scoped to this tenant
 
         _set(step="backfill", detail="fetching new bookmarks from X…")
-        # Freemium: unpaid accounts import only their most-recent N bookmarks (the free slice).
-        paid = storage.is_ingestion_paid(con)
-        cap = None if paid else cfg.free_bookmark_limit
+        # Entitlement cap: free slice + purchased import_limit (None = unlimited/comped).
+        cap = storage.effective_import_cap(con, cfg.free_bookmark_limit)
         n_posts = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
-        # Paid but still at/below the free slice = the post-upgrade sync: page the FULL timeline
-        # (incremental would stop at the already-stored newest page and never fetch the rest).
-        full_import = paid and 0 < n_posts <= cfg.free_bookmark_limit
+        purchased = storage.import_limit(con)
+        # Page the FULL timeline (non-incremental) when there's unfetched entitlement below the
+        # already-stored newest page — incremental would stop there and never reach older posts:
+        #  - purchased entitlement not yet filled (just bought more via the slider), or
+        #  - legacy comped/unlimited account still sitting at a partial (free-slice-sized) corpus.
+        if cap is None:
+            full_import = 0 < n_posts <= cfg.free_bookmark_limit
+        else:
+            full_import = purchased > 0 and 0 < n_posts < cap
         added = xapi.backfill_via_api(con, cfg.x_client_id,
                                       incremental=not full_import, max_total=cap)
         _set(added=added)
+
+        # Unused purchased capacity → question credits (the slider promise): if the timeline was
+        # exhausted below the cap, the surplus entitlement converts at the per-bookmark rate.
+        if cap is not None and purchased > 0:
+            total_now = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+            if total_now < cap:  # backfill stops at cap or exhaustion; below cap = exhausted
+                unused = min(cap - total_now, purchased)
+                if unused > 0:
+                    from . import pricing
+                    value = pricing.unused_import_to_credits_usd(unused, cfg.price_per_bookmark_usd)
+                    storage.reduce_import_limit(con, unused)
+                    row = con.execute("SELECT current_setting('app.current_tenant', true)").fetchone()
+                    storage.add_credits(con, row[0], value)
+                    _set(detail=f"imported everything — ${value:.2f} of unused import converted to credits")
 
         ai = BedrockAIClient(
             region=cfg.aws_region,

@@ -82,6 +82,69 @@ def create_payment_session(
     return session.url
 
 
+def create_subscription_session(
+    api_key: str,
+    price_id: str,
+    customer_email: str,
+    client_reference_id: str,
+    success_url: str,
+    cancel_url: str,
+    subscription_metadata: dict[str, str],
+) -> str:
+    """Subscription Checkout whose metadata lands ON THE SUBSCRIPTION (not just the session).
+
+    Stripe denormalizes subscription metadata onto every invoice (``subscription_details.
+    metadata``), so each month's ``invoice.paid`` webhook self-identifies the account and
+    purpose — no cross-event ordering or extra API lookups needed for renewal grants.
+    """
+    stripe.api_key = api_key
+    session = stripe.checkout.Session.create(
+        mode="subscription",
+        line_items=[{"price": price_id, "quantity": 1}],
+        customer_email=customer_email,
+        client_reference_id=client_reference_id,
+        success_url=success_url,
+        cancel_url=cancel_url,
+        subscription_data={"metadata": subscription_metadata},
+    )
+    return session.url
+
+
+def create_amount_session(
+    api_key: str,
+    amount_usd: float,
+    product_name: str,
+    customer_email: str,
+    client_reference_id: str,
+    success_url: str,
+    cancel_url: str,
+    metadata: dict[str, str],
+) -> str:
+    """One-time Checkout for a DYNAMIC amount (no pre-created price) via ``price_data``.
+
+    Used for the import slider (price computed from the chosen bookmark count) and custom
+    credit top-ups. Same webhook contract as ``create_payment_session``.
+    """
+    stripe.api_key = api_key
+    session = stripe.checkout.Session.create(
+        mode="payment",
+        line_items=[{
+            "price_data": {
+                "currency": "usd",
+                "unit_amount": int(round(amount_usd * 100)),
+                "product_data": {"name": product_name},
+            },
+            "quantity": 1,
+        }],
+        customer_email=customer_email,
+        client_reference_id=client_reference_id,
+        success_url=success_url,
+        cancel_url=cancel_url,
+        metadata=metadata,
+    )
+    return session.url
+
+
 def construct_event(payload: bytes, sig_header: str, webhook_secret: str):
     """Verify a webhook signature and return the parsed Stripe event.
 

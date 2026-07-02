@@ -13,7 +13,7 @@ from fastapi import Depends, FastAPI, Form, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from . import auth, authui, billing, categorize, credits, legal, mail, storage
+from . import auth, authui, billing, categorize, credits, legal, mail, pricing, storage
 from .config import Config
 from .deps import SESSION_COOKIE, get_ai, get_db
 from .search import index_posts, search
@@ -46,21 +46,43 @@ def _apply_billing_event(con, info: dict) -> None:
 
 
 def _apply_payment_event(con, event: dict) -> bool:
-    """Handle a one-time payment (ingestion charge or credit pack). Returns True if it was a
-    one-time payment we handled (so the caller skips the subscription path)."""
+    """Handle a one-time payment (import entitlement, credit top-up, legacy ingestion).
+    Returns True if it was a one-time payment we handled (caller skips the subscription path)."""
     if event.get("type") != "checkout.session.completed":
         return False
     obj = event.get("data", {}).get("object", {})
     if obj.get("mode") != "payment":
         return False  # subscription checkout — not ours
     account_id = obj.get("client_reference_id")
-    kind = (obj.get("metadata") or {}).get("kind")
-    if account_id and kind == "ingestion":
+    meta = obj.get("metadata") or {}
+    kind = meta.get("kind")
+    if account_id and kind == "import":
+        try:
+            count = int(meta.get("count", 0))
+        except (TypeError, ValueError):
+            count = 0
+        if count > 0:
+            storage.add_import_limit(con, account_id, count)
+    elif account_id and kind == "ingestion":  # legacy fixed-price full unlock
         storage.set_ingestion_paid(con, account_id, True)
     elif account_id and kind == "credits":
         amount = (obj.get("amount_total") or 0) / 100.0  # cents → USD; credits are 1:1 with $ paid
         if amount > 0:
             storage.add_credits(con, account_id, amount)
+    return True
+
+
+def _apply_invoice_event(con, event: dict) -> bool:
+    """Monthly credit-subscription grant: each paid invoice for our credit sub adds the monthly
+    credits. The subscription's metadata (set at checkout) is denormalized onto the invoice, so
+    the event self-identifies — first invoice and every renewal behave identically."""
+    if event.get("type") != "invoice.paid":
+        return False
+    obj = event.get("data", {}).get("object", {})
+    meta = (obj.get("subscription_details") or {}).get("metadata") or {}
+    account_id = meta.get("account_id")
+    if meta.get("kind") == "credit_sub" and account_id:
+        storage.add_credits(con, account_id, pricing.SUB_MONTHLY_CREDITS_USD)
     return True
 
 
@@ -149,49 +171,109 @@ def create_app() -> FastAPI:
     def billing_page_route(request: Request, con=Depends(get_db)):
         cfg = Config.from_env()
         bal = storage.credit_balance(con)
-        ingested = storage.is_ingestion_paid(con)
+        cap = storage.effective_import_cap(con, cfg.free_bookmark_limit)
         free_left = max(cfg.free_asks_per_day - storage.free_asks_used_today(con), 0)
         asks = int(bal / cfg.ask_price_usd) if cfg.ask_price_usd else 0
         body = (f'<div class="answer"><b>{free_left} free question(s) left today</b> '
                 f"(resets daily) · <b>credit balance: ${bal:.2f}</b> "
                 f"(~{asks} more at ${cfg.ask_price_usd:.2f} each).</div>")
-        if not ingested:
-            n = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
-            body += (f"<p class=lead>Free plan: your {min(n, cfg.free_bookmark_limit)} most recent "
-                     f"bookmarks are in (of {cfg.free_bookmark_limit} free). Unlock your <b>entire</b> "
-                     f"bookmark history — every post, fully AI-organized.</p>")
-            if cfg.stripe_secret_key and cfg.stripe_ingest_price_id:
-                body += ('<form method=post action="/billing/checkout">'
-                         '<input type=hidden name=kind value="ingestion">'
-                         f"<button>Import ALL my bookmarks — ${cfg.ingestion_price_usd:.2f} "
-                         "(one-time)</button></form>")
-            else:
-                body += "<p class=muted>Ingestion checkout isn't configured.</p>"
-        else:
+
+        # --- import entitlement / slider ---
+        if cap is None:
             body += "<p class=muted>✓ Full bookmark history unlocked.</p>"
-        if cfg.stripe_secret_key and cfg.stripe_credit_price_id:
-            body += ('<form method=post action="/billing/checkout" style="margin-top:1rem">'
-                     '<input type=hidden name=kind value="credits">'
-                     "<button>Buy credits</button></form>")
         else:
-            body += "<p class=muted>Credit purchase isn't configured.</p>"
+            n = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+            body += (f"<p class=lead>{min(n, cap):,} of your {cap:,}-bookmark allowance imported "
+                     f"({cfg.free_bookmark_limit:,} free"
+                     + (f" + {cap - cfg.free_bookmark_limit:,} purchased" if cap > cfg.free_bookmark_limit else "")
+                     + ").</p>")
+            if cfg.stripe_secret_key:
+                cents = int(cfg.price_per_bookmark_usd * 100)
+                body += (
+                    "<p><b>Import more of your history</b> — pick how many of your most recent "
+                    f"bookmarks to unlock ({cents}¢ each; your first {cfg.free_bookmark_limit} are free). "
+                    "Have fewer than you pick? <b>The difference converts to question credits</b> "
+                    "automatically.</p>"
+                    '<form method=post action="/billing/checkout">'
+                    '<input type=hidden name=kind value="import">'
+                    f'<input type=range name=count id=imp_n min={pricing.IMPORT_SLIDER_MIN} '
+                    f'max={pricing.IMPORT_SLIDER_MAX} step={pricing.IMPORT_SLIDER_STEP} '
+                    'value="1000" style="width:100%" '
+                    "oninput=\"document.getElementById('imp_lbl').textContent="
+                    "Number(this.value).toLocaleString();"
+                    "document.getElementById('imp_price').textContent="
+                    f"((Math.max(0,this.value-{cfg.free_bookmark_limit}))*{cfg.price_per_bookmark_usd}).toFixed(2)\">"
+                    '<div class=row style="margin:.4rem 0 .6rem">'
+                    '<span>up to <b id=imp_lbl>1,000</b> bookmarks</span>'
+                    '<span style="margin-left:auto">$<b id=imp_price>9.00</b> one-time</span></div>'
+                    "<button>Import them</button></form>"
+                )
+
+        # --- credits: custom one-time + subscription ---
+        if cfg.stripe_secret_key:
+            body += (
+                '<div style="margin-top:1.4rem"><b>Top up credits</b> ($1 = $1 of questions)'
+                '<form method=post action="/billing/checkout" class=row style="margin-top:.4rem">'
+                '<input type=hidden name=kind value="credits">'
+                f'<input type=number name=amount min={pricing.MIN_CREDIT_TOPUP_USD:.0f} '
+                f'max={pricing.MAX_CREDIT_TOPUP_USD:.0f} step=1 value=10 '
+                'style="width:6rem;padding:.5rem;border-radius:8px;border:1px solid var(--line-2)"> '
+                "<button>Buy credits</button></form></div>"
+            )
+            if cfg.stripe_credit_sub_price_id:
+                body += (
+                    f'<div style="margin-top:1rem"><b>Or subscribe & save:</b> '
+                    f"${pricing.SUB_PRICE_USD:.2f}/mo gets you "
+                    f"<b>${pricing.SUB_MONTHLY_CREDITS_USD:.2f} of credits every month</b> "
+                    f"(~{int(pricing.SUB_MONTHLY_CREDITS_USD / cfg.ask_price_usd)} questions)."
+                    '<form method=post action="/billing/checkout" style="margin-top:.4rem">'
+                    '<input type=hidden name=kind value="subscribe">'
+                    "<button>Subscribe</button></form></div>"
+                )
+        else:
+            body += "<p class=muted>Billing isn't configured.</p>"
         return page("Billing", body)
 
     @app.post("/billing/checkout")
-    def checkout_route(request: Request, kind: str = Form("credits"), con=Depends(get_db)):
+    def checkout_route(request: Request, kind: str = Form("credits"),
+                       count: int = Form(0), amount: float = Form(0.0), con=Depends(get_db)):
         cfg = Config.from_env()
-        price_id = cfg.stripe_ingest_price_id if kind == "ingestion" else cfg.stripe_credit_price_id
-        if not (cfg.stripe_secret_key and price_id):
+        if not cfg.stripe_secret_key:
             return RedirectResponse("/ui/billing", status_code=303)
         account_id = _current_account(request, cfg)
         email = storage.get_account_email(con, account_id) or "local@bookmarkbrain.app"
         base = str(request.base_url).rstrip("/")
-        url = billing.create_payment_session(
-            api_key=cfg.stripe_secret_key, price_id=price_id,
-            customer_email=email, client_reference_id=account_id,
-            success_url=base + "/billing/success", cancel_url=base + "/ui/billing",
-            metadata={"kind": kind, "account_id": account_id},
-        )
+        common = dict(api_key=cfg.stripe_secret_key, customer_email=email,
+                      client_reference_id=account_id,
+                      success_url=base + "/billing/success", cancel_url=base + "/ui/billing")
+
+        if kind == "import":
+            n = max(pricing.IMPORT_SLIDER_MIN, min(int(count), pricing.IMPORT_SLIDER_MAX))
+            price = pricing.import_price_usd(n, cfg.free_bookmark_limit, cfg.price_per_bookmark_usd)
+            if price <= 0:
+                return RedirectResponse("/ui/billing", status_code=303)
+            url = billing.create_amount_session(
+                amount_usd=price,
+                product_name=f"Import your {n:,} most recent bookmarks — x-bookmarks.ai",
+                metadata={"kind": "import", "count": str(n), "account_id": account_id}, **common)
+        elif kind == "subscribe":
+            if not cfg.stripe_credit_sub_price_id:
+                return RedirectResponse("/ui/billing", status_code=303)
+            url = billing.create_subscription_session(
+                price_id=cfg.stripe_credit_sub_price_id,
+                subscription_metadata={"kind": "credit_sub", "account_id": account_id}, **common)
+        elif kind == "credits":
+            amt = max(pricing.MIN_CREDIT_TOPUP_USD,
+                      min(float(amount or 0), pricing.MAX_CREDIT_TOPUP_USD))
+            url = billing.create_amount_session(
+                amount_usd=amt, product_name=f"${amt:.2f} of question credits — x-bookmarks.ai",
+                metadata={"kind": "credits", "account_id": account_id}, **common)
+        else:  # legacy fixed-price full unlock
+            if not cfg.stripe_ingest_price_id:
+                return RedirectResponse("/ui/billing", status_code=303)
+            url = billing.create_payment_session(
+                price_id=cfg.stripe_ingest_price_id,
+                metadata={"kind": "ingestion", "account_id": account_id}, **common)
         return RedirectResponse(url, status_code=303)
 
     @app.get("/billing/success")
@@ -213,10 +295,11 @@ def create_app() -> FastAPI:
         event = json.loads(payload)
         con = connect(cfg.database_url, cfg.tenant_id)  # owner; accounts is not RLS-scoped
         try:
-            if not _apply_payment_event(con, event):          # one-time (ingestion / credits)?
-                info = billing.summarize_event(event)          # else subscription lifecycle
-                if info:
-                    _apply_billing_event(con, info)
+            if not _apply_payment_event(con, event):          # one-time (import/credits/legacy)?
+                if not _apply_invoice_event(con, event):       # monthly credit-sub grant?
+                    info = billing.summarize_event(event)      # else subscription lifecycle
+                    if info:
+                        _apply_billing_event(con, info)
         finally:
             con.close()
         return {"received": True}

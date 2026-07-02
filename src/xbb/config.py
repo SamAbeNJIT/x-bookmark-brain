@@ -57,6 +57,11 @@ class Config:
     free_bookmark_limit: int
     free_asks_per_day: int
 
+    # Import slider: price per bookmark of purchased entitlement (first free_bookmark_limit free).
+    price_per_bookmark_usd: float
+    # Monthly credit subscription (grants pricing.SUB_MONTHLY_CREDITS_USD per invoice).
+    stripe_credit_sub_price_id: str | None
+
     # AWS hardening: KMS key for encrypting X OAuth tokens; SES sender for magic-link emails.
     # Both optional — unset → tokens stored plaintext / magic link logged to console (local dev).
     kms_key_id: str | None
@@ -88,6 +93,8 @@ class Config:
             ingestion_price_usd=float(os.getenv("INGESTION_PRICE_USD", "9.99")),
             free_bookmark_limit=int(os.getenv("FREE_BOOKMARK_LIMIT", "100")),
             free_asks_per_day=int(os.getenv("FREE_ASKS_PER_DAY", "5")),
+            price_per_bookmark_usd=float(os.getenv("PRICE_PER_BOOKMARK_USD", "0.01")),
+            stripe_credit_sub_price_id=os.getenv("STRIPE_CREDIT_SUB_PRICE_ID"),
             kms_key_id=os.getenv("KMS_KEY_ID"),
             ses_sender=os.getenv("SES_SENDER"),
         )
