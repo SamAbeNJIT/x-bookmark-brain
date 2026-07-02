@@ -225,11 +225,10 @@ def create_app() -> FastAPI:
                 "<button>Buy credits</button></form></div>"
             )
             if cfg.stripe_credit_sub_price_id:
+                sub_q = int(pricing.SUB_MONTHLY_CREDITS_USD / cfg.ask_price_usd) if cfg.ask_price_usd else 0
                 body += (
                     f'<div style="margin-top:1rem"><b>Or subscribe & save:</b> '
-                    f"${pricing.SUB_PRICE_USD:.2f}/mo gets you "
-                    f"<b>${pricing.SUB_MONTHLY_CREDITS_USD:.2f} of credits every month</b> "
-                    f"(~{int(pricing.SUB_MONTHLY_CREDITS_USD / cfg.ask_price_usd)} questions)."
+                    f"${pricing.SUB_PRICE_USD:.2f}/mo gets you <b>{sub_q} questions every month</b>."
                     '<form method=post action="/billing/checkout" style="margin-top:.4rem">'
                     '<input type=hidden name=kind value="subscribe">'
                     "<button>Subscribe</button></form></div>"
