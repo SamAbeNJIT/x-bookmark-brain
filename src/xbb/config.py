@@ -53,6 +53,10 @@ class Config:
     ask_price_usd: float
     ingestion_price_usd: float
 
+    # Free tier: bookmarks importable before paying (one-time slice) + free asks per day.
+    free_bookmark_limit: int
+    free_asks_per_day: int
+
     # AWS hardening: KMS key for encrypting X OAuth tokens; SES sender for magic-link emails.
     # Both optional — unset → tokens stored plaintext / magic link logged to console (local dev).
     kms_key_id: str | None
@@ -82,6 +86,8 @@ class Config:
             stripe_credit_price_id=os.getenv("STRIPE_CREDIT_PRICE_ID"),
             ask_price_usd=float(os.getenv("ASK_PRICE_USD", "0.10")),
             ingestion_price_usd=float(os.getenv("INGESTION_PRICE_USD", "9.99")),
+            free_bookmark_limit=int(os.getenv("FREE_BOOKMARK_LIMIT", "100")),
+            free_asks_per_day=int(os.getenv("FREE_ASKS_PER_DAY", "5")),
             kms_key_id=os.getenv("KMS_KEY_ID"),
             ses_sender=os.getenv("SES_SENDER"),
         )

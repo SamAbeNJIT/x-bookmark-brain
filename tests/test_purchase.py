@@ -62,10 +62,22 @@ def test_credit_payment_adds_balance(client, db):
         con.close()
 
 
-def test_sync_blocked_until_ingestion_paid(client, db):
+def test_sync_blocked_once_free_slice_is_full(client, db, monkeypatch):
+    # Unpaid + at/over the free bookmark limit -> upsell redirect to billing.
+    monkeypatch.setenv("FREE_BOOKMARK_LIMIT", "3")  # seeded_db has exactly 3 posts
     con = storage.connect(db)
     con.execute("UPDATE accounts SET ingestion_paid = false WHERE id = %s", (DEFAULT_TENANT_ID,))
     con.commit(); con.close()
     r = client.post("/ui/refresh", follow_redirects=False)
     assert r.status_code == 303
     assert r.headers["location"] == "/ui/billing"
+
+
+def test_sync_allowed_for_unpaid_under_free_slice(client, db):
+    # Freemium: unpaid but under the free limit (3 posts < 100) -> sync is allowed to start.
+    con = storage.connect(db)
+    con.execute("UPDATE accounts SET ingestion_paid = false WHERE id = %s", (DEFAULT_TENANT_ID,))
+    con.commit(); con.close()
+    r = client.post("/ui/refresh", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/ui/refresh"  # proceeds to the sync page, not the paywall

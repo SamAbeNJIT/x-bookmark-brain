@@ -48,7 +48,15 @@ def _run(cfg: Config, tenant_id: str) -> None:
         con = connect(cfg.app_database_url, tenant_id)  # restricted role: RLS-scoped to this tenant
 
         _set(step="backfill", detail="fetching new bookmarks from X…")
-        added = xapi.backfill_via_api(con, cfg.x_client_id, incremental=True)
+        # Freemium: unpaid accounts import only their most-recent N bookmarks (the free slice).
+        paid = storage.is_ingestion_paid(con)
+        cap = None if paid else cfg.free_bookmark_limit
+        n_posts = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+        # Paid but still at/below the free slice = the post-upgrade sync: page the FULL timeline
+        # (incremental would stop at the already-stored newest page and never fetch the rest).
+        full_import = paid and 0 < n_posts <= cfg.free_bookmark_limit
+        added = xapi.backfill_via_api(con, cfg.x_client_id,
+                                      incremental=not full_import, max_total=cap)
         _set(added=added)
 
         ai = BedrockAIClient(

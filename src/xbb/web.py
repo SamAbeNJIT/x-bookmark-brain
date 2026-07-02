@@ -13,7 +13,7 @@ from fastapi import Depends, FastAPI, Form, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from . import auth, authui, billing, categorize, credits, mail, storage
+from . import auth, authui, billing, categorize, credits, legal, mail, storage
 from .config import Config
 from .deps import SESSION_COOKIE, get_ai, get_db
 from .search import index_posts, search
@@ -89,6 +89,15 @@ def create_app() -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    # --- legal (public) ---
+    @app.get("/terms")
+    def terms_route():
+        return legal.terms_page()
+
+    @app.get("/privacy")
+    def privacy_route():
+        return legal.privacy_page()
+
     # --- auth (magic-link sign in) ---
     @app.get("/login")
     def login_page_route():
@@ -141,19 +150,25 @@ def create_app() -> FastAPI:
         cfg = Config.from_env()
         bal = storage.credit_balance(con)
         ingested = storage.is_ingestion_paid(con)
+        free_left = max(cfg.free_asks_per_day - storage.free_asks_used_today(con), 0)
         asks = int(bal / cfg.ask_price_usd) if cfg.ask_price_usd else 0
-        body = (f'<div class="answer"><b>Credit balance: ${bal:.2f}</b> '
-                f"(~{asks} questions at ${cfg.ask_price_usd:.2f} each).</div>")
+        body = (f'<div class="answer"><b>{free_left} free question(s) left today</b> '
+                f"(resets daily) · <b>credit balance: ${bal:.2f}</b> "
+                f"(~{asks} more at ${cfg.ask_price_usd:.2f} each).</div>")
         if not ingested:
+            n = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+            body += (f"<p class=lead>Free plan: your {min(n, cfg.free_bookmark_limit)} most recent "
+                     f"bookmarks are in (of {cfg.free_bookmark_limit} free). Unlock your <b>entire</b> "
+                     f"bookmark history — every post, fully AI-organized.</p>")
             if cfg.stripe_secret_key and cfg.stripe_ingest_price_id:
-                body += ("<p class=lead>Import your X bookmarks to get started.</p>"
-                         '<form method=post action="/billing/checkout">'
+                body += ('<form method=post action="/billing/checkout">'
                          '<input type=hidden name=kind value="ingestion">'
-                         f"<button>Import my bookmarks — ${cfg.ingestion_price_usd:.2f}</button></form>")
+                         f"<button>Import ALL my bookmarks — ${cfg.ingestion_price_usd:.2f} "
+                         "(one-time)</button></form>")
             else:
                 body += "<p class=muted>Ingestion checkout isn't configured.</p>"
         else:
-            body += "<p class=muted>✓ Bookmarks imported.</p>"
+            body += "<p class=muted>✓ Full bookmark history unlocked.</p>"
         if cfg.stripe_secret_key and cfg.stripe_credit_price_id:
             body += ('<form method=post action="/billing/checkout" style="margin-top:1rem">'
                      '<input type=hidden name=kind value="credits">'
@@ -262,18 +277,21 @@ def create_app() -> FastAPI:
     def ask_route(body: AskIn, con=Depends(get_db), ai=Depends(get_ai)):
         cfg = Config.from_env()
         try:
-            return credits.ask_charged(con, ai, body.question, body.k, cfg.ask_price_usd)
+            return credits.ask_charged(con, ai, body.question, body.k, cfg.ask_price_usd,
+                                       cfg.free_asks_per_day)
         except credits.OutOfCredits:
             return {"question": body.question, "citations": [], "retrieved": [],
-                    "answer": f"You're out of credits. Each question costs "
-                              f"${cfg.ask_price_usd:.2f} — top up on the Billing page to continue."}
+                    "answer": f"You've used today's {cfg.free_asks_per_day} free questions and "
+                              f"your credit balance is empty. Each extra question costs "
+                              f"${cfg.ask_price_usd:.2f} — top up on the Billing page, or come "
+                              f"back tomorrow for {cfg.free_asks_per_day} more free ones."}
 
     # HTML screens (issues #4–#7 UI), wired to the same logic + dependencies.
     app.include_router(ui_router)
 
     # When REQUIRE_AUTH is on (hosted/multi-user), gate everything behind a valid session except
     # the public surface (login, the OAuth/auth endpoints, the Stripe webhook, health).
-    _PUBLIC_EXACT = {"/health", "/login"}
+    _PUBLIC_EXACT = {"/health", "/login", "/terms", "/privacy"}
     _PUBLIC_PREFIX = ("/auth/", "/oauth/", "/static/")
 
     @app.middleware("http")

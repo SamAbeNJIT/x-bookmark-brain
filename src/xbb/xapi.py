@@ -178,16 +178,23 @@ class XApiClient:
             time.sleep(0.5)
 
 
-def backfill_via_api(con, client_id: str, incremental: bool = True) -> int:
+def backfill_via_api(con, client_id: str, incremental: bool = True,
+                     max_total: int | None = None) -> int:
     """Pull bookmarks through the v2 API, upsert, and assign bm_rank (newest saved = highest).
 
     Incremental: stop once a whole page is already in the DB (newest-first ordering means
-    we've caught up). Returns the number of newly-added posts.
+    we've caught up). `max_total` caps the tenant's TOTAL stored posts (the freemium slice:
+    unpaid accounts import only their most-recent N). Returns the number of newly-added posts.
     """
     client = XApiClient(con, client_id)
     before = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
-    new_ids: list[str] = []  # in fetch (newest-first) order
+    total = before
+    new_ids: list[str] = []   # newly-stored ids, in fetch (newest-first) order
+    seen_ids: list[str] = []  # every id seen this run, in fetch order (for full re-rank)
+    capped = max_total is not None and total >= max_total
     for page in client.iter_bookmark_pages():
+        if capped:
+            break
         users = {u["id"]: u for u in (page.get("includes") or {}).get("users", [])}
         media = {m["media_key"]: m for m in (page.get("includes") or {}).get("media", [])}
         new_in_page = 0
@@ -196,15 +203,28 @@ def backfill_via_api(con, client_id: str, incremental: bool = True) -> int:
             if not rec["id"]:
                 continue
             exists = con.execute("SELECT 1 FROM posts WHERE id = %s", (rec["id"],)).fetchone()
+            if not exists and max_total is not None and total >= max_total:
+                capped = True
+                break  # free slice full — stop before storing more
             _upsert_post(con, rec)
+            seen_ids.append(rec["id"])
             if not exists:
                 new_in_page += 1
+                total += 1
                 new_ids.append(rec["id"])
         con.commit()
-        if incremental and new_in_page == 0:
+        if capped or (incremental and new_in_page == 0):
             break
-    # bm_rank: assign new posts above everything stored; newest (first fetched) gets the highest.
-    if new_ids:
+    # bm_rank (bookmark order; higher = saved more recently):
+    if not incremental and seen_ids:
+        # Full page-through (e.g. post-upgrade import): we saw the whole timeline newest-first,
+        # so re-rank everything seen to match — older posts fetched last must NOT outrank the
+        # newest ones that were already stored from the free slice.
+        for i, pid in enumerate(seen_ids):  # first fetched = newest = highest rank
+            con.execute("UPDATE posts SET bm_rank = %s WHERE id = %s", (len(seen_ids) - i, pid))
+        con.commit()
+    elif new_ids:
+        # Incremental top-up: everything new is newer than everything stored.
         base = con.execute("SELECT COALESCE(MAX(bm_rank), 0) FROM posts").fetchone()[0]
         for i, pid in enumerate(reversed(new_ids)):  # oldest-of-batch first
             con.execute("UPDATE posts SET bm_rank = %s WHERE id = %s", (base + 1 + i, pid))

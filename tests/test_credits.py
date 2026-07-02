@@ -31,8 +31,9 @@ def test_add_and_refund_credits(db):
         con.close()
 
 
-def test_ask_route_blocks_when_out_of_credits(client, db):
-    # Drain the funded default account, then the ask route should return the out-of-credits notice.
+def test_ask_route_blocks_when_out_of_credits(client, db, monkeypatch):
+    # No free allowance + drained balance -> the ask route returns the out-of-credits notice.
+    monkeypatch.setenv("FREE_ASKS_PER_DAY", "0")
     con = storage.connect(db)
     try:
         con.execute("UPDATE accounts SET credit_balance_usd = 0 WHERE id = %s",
@@ -40,11 +41,12 @@ def test_ask_route_blocks_when_out_of_credits(client, db):
     finally:
         con.close()
     body = client.post("/ask", json={"question": "rag evaluation", "k": 3}).json()
-    assert "out of credits" in body["answer"].lower()
+    assert "credit balance is empty" in body["answer"].lower()
     assert body["citations"] == []
 
 
-def test_ask_route_works_and_debits_when_funded(client, db):
+def test_ask_route_works_and_debits_when_funded(client, db, monkeypatch):
+    monkeypatch.setenv("FREE_ASKS_PER_DAY", "0")  # bypass the free allowance to test the debit
     con = storage.connect(db)
     try:
         con.execute("UPDATE accounts SET credit_balance_usd = 1.00 WHERE id = %s",
@@ -52,7 +54,7 @@ def test_ask_route_works_and_debits_when_funded(client, db):
     finally:
         con.close()
     body = client.post("/ask", json={"question": "rag evaluation", "k": 3}).json()
-    assert "out of credits" not in body["answer"].lower()    # a real answer
+    assert "credit balance is empty" not in body["answer"].lower()    # a real answer
     con = storage.connect(db)
     try:
         assert abs(storage.credit_balance(con) - 0.90) < 1e-9  # charged one $0.10 ask

@@ -215,6 +215,7 @@ _NAV_ITEMS = [
     ("/ui/feed", "Feed", "▦"),
     ("/ui/taxonomy", "Taxonomy", "⚙"),
     ("/ui/refresh", "Sync", "↻"),
+    ("/ui/billing", "Billing", "◈"),
 ]
 
 _SIDEBAR = (
@@ -226,7 +227,9 @@ _SIDEBAR = (
         for href, label, ic in _NAV_ITEMS
     )
     + "</nav>"
-    '<div class="side-foot">private · AI-searched</div>'
+    '<div class="side-foot">private · AI-searched<br>'
+    '<a href="/terms" style="color:inherit">terms</a> · '
+    '<a href="/privacy" style="color:inherit">privacy</a></div>'
     "</aside>"
 )
 

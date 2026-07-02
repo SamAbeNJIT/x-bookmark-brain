@@ -92,10 +92,14 @@ def oauth_callback(code: str = "", state: str = "", error: str = "", con=Depends
 
 @ui_router.post("/ui/refresh")
 def ui_refresh_start(request: Request, con=Depends(get_db)):
-    # Ingestion gate: importing/syncing bookmarks requires the one-time ingestion charge.
+    cfg = Config.from_env()
+    # Freemium ingestion gate: unpaid accounts may sync while under the free slice (the backfill
+    # itself caps at cfg.free_bookmark_limit); once the slice is full, upgrade to import the rest.
     if not storage.is_ingestion_paid(con):
-        return RedirectResponse(url="/ui/billing", status_code=303)
-    jobs.start(resolve_tenant(request, Config.from_env()))  # sync runs under THIS user's tenant
+        n = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+        if n >= cfg.free_bookmark_limit:
+            return RedirectResponse(url="/ui/billing", status_code=303)
+    jobs.start(resolve_tenant(request, cfg))  # sync runs under THIS user's tenant
     return RedirectResponse(url="/ui/refresh", status_code=303)
 
 
@@ -190,10 +194,13 @@ def ui_ask_post(question: str = Form(...), con=Depends(get_db), ai=Depends(get_a
     form = _ask_form(question, autofocus=False)
     cfg = Config.from_env()
     try:
-        result = credits.ask_charged(con, ai, question, 30, cfg.ask_price_usd)
+        result = credits.ask_charged(con, ai, question, 30, cfg.ask_price_usd,
+                                     cfg.free_asks_per_day)
     except credits.OutOfCredits:
-        msg = (f'<div class="answer">You\'re out of credits — each question costs '
-               f'${cfg.ask_price_usd:.2f}. <a href="/ui/billing">Top up</a> to continue.</div>')
+        msg = (f'<div class="answer">You\'ve used today\'s {cfg.free_asks_per_day} free questions '
+               f'and your credit balance is empty. <a href="/ui/billing">Top up</a> '
+               f'(${cfg.ask_price_usd:.2f}/question) or come back tomorrow for '
+               f'{cfg.free_asks_per_day} more free ones.</div>')
         return page("Ask", form + msg)
     except Exception:
         return page("Ask", form + _ai_error("Ask"))

@@ -365,6 +365,34 @@ def debit_credits(con: psycopg.Connection, amount_usd: float) -> bool:
     return row is not None
 
 
+def use_free_ask(con: psycopg.Connection, daily_limit: int) -> bool:
+    """Consume one of today's free asks if any remain. Returns True if a free ask was granted.
+
+    The counter lives in sync_state under a per-day key (RLS scopes it to the tenant); the
+    conditional UPDATE makes the increment atomic, so concurrent asks can't exceed the limit.
+    """
+    key_row = con.execute("SELECT to_char(now(), 'YYYY-MM-DD')").fetchone()
+    key = f"free_asks:{key_row[0]}"
+    con.execute(
+        "INSERT INTO sync_state (key, value) VALUES (%s, '0') ON CONFLICT (tenant_id, key) DO NOTHING",
+        (key,),
+    )
+    row = con.execute(
+        "UPDATE sync_state SET value = (value::int + 1)::text "
+        "WHERE key = %s AND value::int < %s RETURNING value",
+        (key, daily_limit),
+    ).fetchone()
+    con.commit()
+    return row is not None
+
+
+def free_asks_used_today(con: psycopg.Connection) -> int:
+    row = con.execute(
+        "SELECT value::int FROM sync_state WHERE key = 'free_asks:' || to_char(now(), 'YYYY-MM-DD')"
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
 def refund_credits(con: psycopg.Connection, amount_usd: float) -> None:
     """Return a debited amount to the current tenant (e.g. when an ask fails after charging)."""
     con.execute(
