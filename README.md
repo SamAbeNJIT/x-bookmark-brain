@@ -13,8 +13,9 @@ a question (sent to Amazon Bedrock) — never your library in bulk.
 - **One-shot backfill** of your full bookmark history via X's **official OAuth API** — you
   click "Connect X" and authorize (no password, no cookies). Idempotent and incremental:
   re-syncs pull only genuinely-new bookmarks (24h-deduplicated, so it's cheap).
-- **Semantic search** — find posts by meaning, not keywords. Vectors live in Postgres
-  (pgvector, HNSW index); ranking is a cosine nearest-neighbour query in the database.
+- **Hybrid search** — find posts by meaning *and* by exact keywords (handles, URLs, acronyms).
+  A pgvector cosine leg and a Postgres full-text leg are fused with Reciprocal Rank Fusion,
+  entirely in the database.
 - **Ask (RAG)** — ask a plain-language question; Claude answers and cites the saved posts it
   used (citations are constrained to what was actually retrieved).
 - **Auto-categorization** — a taxonomy *derived from your own bookmarks* (not a canned
