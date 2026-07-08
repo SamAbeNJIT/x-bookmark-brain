@@ -63,14 +63,38 @@ def index_posts(
 
 
 def search(con: psycopg.Connection, ai: AIClient, query: str, k: int = 10) -> list[dict[str, Any]]:
-    """Return up to k posts ranked by cosine similarity to the query (pgvector HNSW)."""
+    """Hybrid retrieval: semantic (pgvector HNSW) + lexical (Postgres FTS), fused with RRF.
+
+    The two legs each rank their top candidates; Reciprocal Rank Fusion (k=60) merges them —
+    rank-based, so the incomparable scores (cosine distance vs ts_rank) never need normalizing.
+    An empty/no-match lexical leg degrades gracefully to pure vector search. Scores returned to
+    callers are RRF normalized to 0–1 (top hit = 1.0) since the UI displays them.
+    """
     q = np.asarray(ai.embed([query])[0], dtype=np.float32)
+    leg = max(40, k)  # candidates considered per leg before fusion
     rows = con.execute(
         """
-        SELECT p.id, p.url, p.text, a.handle, a.avatar_url, p.media_json, c.parent,
-               e.vector <=> %s AS dist
-        FROM embeddings e
-        JOIN posts p ON p.tenant_id = e.tenant_id AND p.id = e.post_id
+        WITH vec AS (
+            SELECT e.post_id AS id, ROW_NUMBER() OVER (ORDER BY e.vector <=> %s) AS r
+            FROM embeddings e
+            ORDER BY e.vector <=> %s
+            LIMIT %s
+        ), lex AS (
+            SELECT p.id,
+                   ROW_NUMBER() OVER (
+                       ORDER BY ts_rank_cd(p.text_tsv, websearch_to_tsquery('english', %s)) DESC
+                   ) AS r
+            FROM posts p
+            WHERE p.text_tsv @@ websearch_to_tsquery('english', %s)
+            LIMIT %s
+        ), fused AS (
+            SELECT COALESCE(v.id, l.id) AS id,
+                   COALESCE(1.0 / (60 + v.r), 0) + COALESCE(1.0 / (60 + l.r), 0) AS rrf
+            FROM vec v FULL OUTER JOIN lex l ON l.id = v.id
+        )
+        SELECT p.id, p.url, p.text, a.handle, a.avatar_url, p.media_json, c.parent, f.rrf
+        FROM fused f
+        JOIN posts p ON p.id = f.id
         LEFT JOIN authors a ON a.tenant_id = p.tenant_id AND a.id = p.author_id
         LEFT JOIN LATERAL (
             SELECT category_id AS cid
@@ -80,13 +104,16 @@ def search(con: psycopg.Connection, ai: AIClient, query: str, k: int = 10) -> li
             LIMIT 1
         ) pa ON true
         LEFT JOIN categories c ON c.id = pa.cid
-        ORDER BY dist
+        ORDER BY f.rrf DESC, p.id
         LIMIT %s
         """,
-        (q, k),
+        (q, q, leg, query, query, leg, k),
     ).fetchall()
+    if not rows:
+        return []
+    top = float(rows[0][7])  # ORDER BY rrf DESC -> first row holds the max
     return [
         {"id": r[0], "url": r[1], "text": r[2], "handle": r[3], "avatar_url": r[4],
-         "media_json": r[5], "parent": r[6], "score": 1.0 - float(r[7])}
+         "media_json": r[5], "parent": r[6], "score": float(r[7]) / top}
         for r in rows
     ]

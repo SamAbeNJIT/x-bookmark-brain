@@ -48,7 +48,10 @@ CREATE TABLE IF NOT EXISTS accounts (
     subscription_status   text,        -- 'active' | 'past_due' | 'canceled' | NULL
     stripe_customer_id    text,
     stripe_subscription_id text,
-    monthly_quota_usd     double precision  -- per-account cap; NULL = use the config default
+    monthly_quota_usd     double precision, -- per-account cap; NULL = use the config default
+    credit_balance_usd    double precision NOT NULL DEFAULT 0,   -- prepaid credits, drawn down by asks
+    ingestion_paid        boolean NOT NULL DEFAULT false,        -- legacy/comped: TRUE = unlimited import
+    import_limit          integer NOT NULL DEFAULT 0             -- purchased entitlement beyond the free slice
 );
 
 CREATE TABLE IF NOT EXISTS authors (
@@ -80,6 +83,7 @@ CREATE TABLE IF NOT EXISTS posts (
     raw_json       text,                 -- original X payload, retained verbatim
     bm_rank        bigint,               -- bookmark-recency rank; higher = more recently saved
     label_attempted integer,             -- 1 once labeling has been tried
+    text_tsv       tsvector GENERATED ALWAYS AS (to_tsvector('english', coalesce(text, ''))) STORED,
     PRIMARY KEY (tenant_id, id),
     FOREIGN KEY (tenant_id, author_id) REFERENCES authors (tenant_id, id)
 );
@@ -189,6 +193,13 @@ _MIGRATIONS = (
     "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS stripe_customer_id text",
     "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS stripe_subscription_id text",
     "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS monthly_quota_usd double precision",
+    "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS credit_balance_usd double precision NOT NULL DEFAULT 0",
+    "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS ingestion_paid boolean NOT NULL DEFAULT false",
+    "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS import_limit integer NOT NULL DEFAULT 0",
+    # Hybrid search: lexical leg. Column must exist before the index (order matters here).
+    "ALTER TABLE posts ADD COLUMN IF NOT EXISTS text_tsv tsvector "
+    "GENERATED ALWAYS AS (to_tsvector('english', coalesce(text, ''))) STORED",
+    "CREATE INDEX IF NOT EXISTS posts_text_tsv_gin ON posts USING gin (text_tsv)",
 )
 
 
@@ -205,10 +216,13 @@ def init_db(dsn: str, tenant_id: str | None = None) -> None:
             con.execute(stmt)
         _apply_rls(con)
         _apply_grants(con)
-        # Seed the account row for the default/single-user tenant so its tenant_id is valid.
+        # Seed the default/single-user (owner) account: pre-paid + funded so local use is never
+        # gated by billing. Real signups create their own accounts starting unpaid with $0.
+        # (email is a valid-format placeholder — Stripe rejects no-TLD addresses.)
         con.execute(
-            "INSERT INTO accounts (id, email) VALUES (%s, %s) ON CONFLICT (id) DO NOTHING",
-            (tid, "local@bookmarkbrain.app"),  # valid-format placeholder (Stripe rejects no-TLD)
+            "INSERT INTO accounts (id, email, ingestion_paid, credit_balance_usd) "
+            "VALUES (%s, %s, true, 1000000) ON CONFLICT (id) DO NOTHING",
+            (tid, "local@bookmarkbrain.app"),
         )
         con.commit()
 
@@ -243,6 +257,21 @@ def set_state(con: psycopg.Connection, key: str, value: str | None) -> None:
             (key, value),
         )
     con.commit()
+
+
+def set_pkce(con: psycopg.Connection, state: str, verifier: str) -> None:
+    """Stash an OAuth PKCE verifier (keyed by state) in the DB so the login→callback handshake
+    survives across web instances (App Runner autoscaling)."""
+    set_state(con, f"pkce:{state}", verifier)
+
+
+def pop_pkce(con: psycopg.Connection, state: str) -> str | None:
+    """Fetch and delete the PKCE verifier for a state (one-time use)."""
+    key = f"pkce:{state}"
+    verifier = get_state(con, key)
+    if verifier is not None:
+        set_state(con, key, None)
+    return verifier
 
 
 def get_or_create_account(con: psycopg.Connection, email: str) -> str:
@@ -307,6 +336,126 @@ def account_monthly_quota(con: psycopg.Connection) -> float | None:
         "WHERE id = current_setting('app.current_tenant', true)::uuid"
     ).fetchone()
     return float(row[0]) if row and row[0] is not None else None
+
+
+# --------------------------------------------------------------------------- credits
+# Prepaid balance drawn down by billable actions (asks). All scoped to the current tenant.
+
+
+def credit_balance(con: psycopg.Connection) -> float:
+    row = con.execute(
+        "SELECT credit_balance_usd FROM accounts "
+        "WHERE id = current_setting('app.current_tenant', true)::uuid"
+    ).fetchone()
+    return float(row[0]) if row and row[0] is not None else 0.0
+
+
+def add_credits(con: psycopg.Connection, account_id: str, amount_usd: float) -> None:
+    """Top up an account's prepaid balance (called from the Stripe one-time-payment webhook)."""
+    con.execute(
+        "UPDATE accounts SET credit_balance_usd = credit_balance_usd + %s WHERE id = %s",
+        (amount_usd, account_id),
+    )
+    con.commit()
+
+
+def debit_credits(con: psycopg.Connection, amount_usd: float) -> bool:
+    """Atomically charge the current tenant if it has the balance. Returns False if insufficient
+    (the WHERE clause prevents a balance from ever going negative under concurrent asks)."""
+    row = con.execute(
+        "UPDATE accounts SET credit_balance_usd = credit_balance_usd - %s "
+        "WHERE id = current_setting('app.current_tenant', true)::uuid "
+        "AND credit_balance_usd >= %s RETURNING credit_balance_usd",
+        (amount_usd, amount_usd),
+    ).fetchone()
+    con.commit()
+    return row is not None
+
+
+def use_free_ask(con: psycopg.Connection, daily_limit: int) -> bool:
+    """Consume one of today's free asks if any remain. Returns True if a free ask was granted.
+
+    The counter lives in sync_state under a per-day key (RLS scopes it to the tenant); the
+    conditional UPDATE makes the increment atomic, so concurrent asks can't exceed the limit.
+    """
+    key_row = con.execute("SELECT to_char(now(), 'YYYY-MM-DD')").fetchone()
+    key = f"free_asks:{key_row[0]}"
+    con.execute(
+        "INSERT INTO sync_state (key, value) VALUES (%s, '0') ON CONFLICT (tenant_id, key) DO NOTHING",
+        (key,),
+    )
+    row = con.execute(
+        "UPDATE sync_state SET value = (value::int + 1)::text "
+        "WHERE key = %s AND value::int < %s RETURNING value",
+        (key, daily_limit),
+    ).fetchone()
+    con.commit()
+    return row is not None
+
+
+def free_asks_used_today(con: psycopg.Connection) -> int:
+    row = con.execute(
+        "SELECT value::int FROM sync_state WHERE key = 'free_asks:' || to_char(now(), 'YYYY-MM-DD')"
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def refund_credits(con: psycopg.Connection, amount_usd: float) -> None:
+    """Return a debited amount to the current tenant (e.g. when an ask fails after charging)."""
+    con.execute(
+        "UPDATE accounts SET credit_balance_usd = credit_balance_usd + %s "
+        "WHERE id = current_setting('app.current_tenant', true)::uuid",
+        (amount_usd,),
+    )
+    con.commit()
+
+
+def import_limit(con: psycopg.Connection) -> int:
+    """The current tenant's PURCHASED import entitlement (bookmarks beyond the free slice)."""
+    row = con.execute(
+        "SELECT import_limit FROM accounts "
+        "WHERE id = current_setting('app.current_tenant', true)::uuid"
+    ).fetchone()
+    return int(row[0]) if row and row[0] is not None else 0
+
+
+def add_import_limit(con: psycopg.Connection, account_id: str, n: int) -> None:
+    """Raise an account's purchased import entitlement by n bookmarks (from a paid checkout)."""
+    con.execute(
+        "UPDATE accounts SET import_limit = import_limit + %s WHERE id = %s", (n, account_id)
+    )
+    con.commit()
+
+
+def reduce_import_limit(con: psycopg.Connection, n: int) -> None:
+    """Shrink the current tenant's purchased entitlement (unused capacity → credits conversion)."""
+    con.execute(
+        "UPDATE accounts SET import_limit = GREATEST(import_limit - %s, 0) "
+        "WHERE id = current_setting('app.current_tenant', true)::uuid",
+        (n,),
+    )
+    con.commit()
+
+
+def effective_import_cap(con: psycopg.Connection, free_limit: int) -> int | None:
+    """Total bookmarks this tenant may store: None = unlimited (comped/legacy ingestion_paid),
+    else the free slice + purchased entitlement."""
+    if is_ingestion_paid(con):
+        return None
+    return free_limit + import_limit(con)
+
+
+def is_ingestion_paid(con: psycopg.Connection) -> bool:
+    row = con.execute(
+        "SELECT ingestion_paid FROM accounts "
+        "WHERE id = current_setting('app.current_tenant', true)::uuid"
+    ).fetchone()
+    return bool(row and row[0])
+
+
+def set_ingestion_paid(con: psycopg.Connection, account_id: str, paid: bool = True) -> None:
+    con.execute("UPDATE accounts SET ingestion_paid = %s WHERE id = %s", (paid, account_id))
+    con.commit()
 
 
 # --------------------------------------------------------------------------- usage metering

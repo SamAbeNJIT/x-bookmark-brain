@@ -8,9 +8,11 @@ now the routes return JSON.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, Request, Response
 from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import auth, authui, billing, categorize, credits, legal, mail, pricing, storage
@@ -375,9 +377,14 @@ def create_app() -> FastAPI:
     # HTML screens (issues #4–#7 UI), wired to the same logic + dependencies.
     app.include_router(ui_router)
 
+    # Landing-page screenshots etc. (packaged in xbb/static; /static is auth-exempt below).
+    static_dir = Path(__file__).parent / "static"
+    if static_dir.is_dir():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
     # When REQUIRE_AUTH is on (hosted/multi-user), gate everything behind a valid session except
     # the public surface (login, the OAuth/auth endpoints, the Stripe webhook, health).
-    _PUBLIC_EXACT = {"/health", "/login", "/terms", "/privacy"}
+    _PUBLIC_EXACT = {"/health", "/login", "/terms", "/privacy", "/"}  # "/" shows the landing page
     _PUBLIC_PREFIX = ("/auth/", "/oauth/", "/static/")
 
     @app.middleware("http")

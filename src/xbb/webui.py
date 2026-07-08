@@ -11,7 +11,7 @@ import json
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from . import categorize, credits, jobs, storage, xapi, xauth
+from . import auth, categorize, credits, jobs, landing, storage, xapi, xauth
 from .config import Config
 from .deps import get_ai, get_db, resolve_tenant
 from .search import search
@@ -22,7 +22,13 @@ ui_router = APIRouter()
 
 
 @ui_router.get("/")
-def home(con=Depends(get_db)):
+def home(request: Request, con=Depends(get_db)):
+    # Hosted mode: anonymous visitors get the marketing landing page; signed-in users the app.
+    cfg = Config.from_env()
+    if cfg.require_auth:
+        tok = request.cookies.get("xbb_session")
+        if not (tok and auth.verify_session_token(tok, cfg.session_secret)):
+            return landing.landing_page()
     posts = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
     cats = con.execute("SELECT COUNT(*) FROM categories").fetchone()[0]
     labeled = con.execute("SELECT COUNT(DISTINCT post_id) FROM assignments").fetchone()[0]

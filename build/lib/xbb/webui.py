@@ -8,24 +8,27 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, Form
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from . import categorize, jobs, xapi, xauth
-from .ask import ask
+from . import auth, categorize, credits, jobs, landing, storage, xapi, xauth
 from .config import Config
-from .deps import get_ai, get_db
+from .deps import get_ai, get_db, resolve_tenant
 from .search import search
-from .templates import esc, legend, page, parent_color, post_card
+from .templates import esc, legend, md_lite, page, parent_color, post_card
 
 ui_router = APIRouter()
 
-# Short-lived PKCE verifiers keyed by state, between /oauth/login and /oauth/callback.
-_pending_pkce: dict[str, str] = {}
 
 
 @ui_router.get("/")
-def home(con=Depends(get_db)):
+def home(request: Request, con=Depends(get_db)):
+    # Hosted mode: anonymous visitors get the marketing landing page; signed-in users the app.
+    cfg = Config.from_env()
+    if cfg.require_auth:
+        tok = request.cookies.get("xbb_session")
+        if not (tok and auth.verify_session_token(tok, cfg.session_secret)):
+            return landing.landing_page()
     posts = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
     cats = con.execute("SELECT COUNT(*) FROM categories").fetchone()[0]
     labeled = con.execute("SELECT COUNT(DISTINCT post_id) FROM assignments").fetchone()[0]
@@ -65,13 +68,13 @@ def home(con=Depends(get_db)):
 
 
 @ui_router.get("/oauth/login")
-def oauth_login():
+def oauth_login(con=Depends(get_db)):
     cfg = Config.from_env()
     if not cfg.x_client_id:
         return page("Connect X", "<p class=muted>X_CLIENT_ID is not set in .env.</p>")
     verifier, challenge = xauth.make_pkce()
     state = xauth.make_state()
-    _pending_pkce[state] = verifier
+    storage.set_pkce(con, state, verifier)  # DB-backed: survives across web instances
     return RedirectResponse(
         xauth.authorize_url(cfg.x_client_id, cfg.x_redirect_uri, state, challenge), status_code=307
     )
@@ -81,7 +84,7 @@ def oauth_login():
 def oauth_callback(code: str = "", state: str = "", error: str = "", con=Depends(get_db)):
     if error:
         return page("Connect X", f'<div class="answer" style="border-left-color:#d64545">X denied the connection: {esc(error)}</div>')
-    verifier = _pending_pkce.pop(state, None)
+    verifier = storage.pop_pkce(con, state)
     if not verifier or not code:
         return page("Connect X", '<div class="answer" style="border-left-color:#d64545">Connection expired or invalid — start again from Sync.</div>')
     cfg = Config.from_env()
@@ -94,8 +97,16 @@ def oauth_callback(code: str = "", state: str = "", error: str = "", con=Depends
 
 
 @ui_router.post("/ui/refresh")
-def ui_refresh_start():
-    jobs.start()
+def ui_refresh_start(request: Request, con=Depends(get_db)):
+    cfg = Config.from_env()
+    # Import gate: sync is allowed while the account is under its entitlement (free slice +
+    # purchased import_limit; None = unlimited). At the cap, send them to the billing slider.
+    cap = storage.effective_import_cap(con, cfg.free_bookmark_limit)
+    if cap is not None:
+        n = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+        if n >= cap:
+            return RedirectResponse(url="/ui/billing", status_code=303)
+    jobs.start(resolve_tenant(request, cfg))  # sync runs under THIS user's tenant
     return RedirectResponse(url="/ui/refresh", status_code=303)
 
 
@@ -188,8 +199,16 @@ def ui_ask(question: str = "", con=Depends(get_db), ai=Depends(get_ai)):
 @ui_router.post("/ui/ask")
 def ui_ask_post(question: str = Form(...), con=Depends(get_db), ai=Depends(get_ai)):
     form = _ask_form(question, autofocus=False)
+    cfg = Config.from_env()
     try:
-        result = ask(con, ai, question, 30)
+        result = credits.ask_charged(con, ai, question, 30, cfg.ask_price_usd,
+                                     cfg.free_asks_per_day)
+    except credits.OutOfCredits:
+        msg = (f'<div class="answer">You\'ve used today\'s {cfg.free_asks_per_day} free questions '
+               f'and your credit balance is empty. <a href="/ui/billing">Top up</a> '
+               f'(${cfg.ask_price_usd:.2f}/question) or come back tomorrow for '
+               f'{cfg.free_asks_per_day} more free ones.</div>')
+        return page("Ask", form + msg)
     except Exception:
         return page("Ask", form + _ai_error("Ask"))
     cited = set(result["citations"])
@@ -207,15 +226,21 @@ def ui_ask_post(question: str = Form(...), con=Depends(get_db), ai=Depends(get_a
         return html
 
     cards = "".join(_card(p) for p in retrieved)
-    answer = f'<div class="answer">{esc(result.get("answer") or "")}</div>'
-    sources = (
-        f'<h3>{len(retrieved)} related bookmarks '
-        f'<span class=muted>({len(cited)} cited in the answer)</span></h3>'
-        f'<div class="cards">{cards}</div>'
-        if retrieved
-        else ""
-    )
-    return page("Ask", form + answer + sources)
+    answer = f'<div class="answer">{md_lite(result.get("answer"))}</div>'
+    if retrieved:
+        # Two-pane: the answer sticks on the left while the source bookmarks scroll on the right.
+        body = (
+            '<div class="ask-cols">'
+            f'<div class="ask-left">{answer}</div>'
+            '<div class="ask-right">'
+            f'<h3>{len(retrieved)} related bookmarks '
+            f'<span class=muted>({len(cited)} cited in the answer)</span></h3>'
+            f'<div class="cards">{cards}</div>'
+            "</div></div>"
+        )
+    else:
+        body = answer
+    return page("Ask", form + body, wide=bool(retrieved))
 
 
 @ui_router.get("/ui/categories")

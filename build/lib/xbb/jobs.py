@@ -35,20 +35,48 @@ def _set(**kw: Any) -> None:
         _status.update(kw)
 
 
-def _run(cfg: Config) -> None:
+def _run(cfg: Config, tenant_id: str) -> None:
     from . import categorize, storage, usage, xapi
     from .ai import BedrockAIClient
     from .search import index_posts
-    from .storage import connect, init_db
+    from .storage import connect
 
     con = None
     try:
-        init_db(cfg.database_url, cfg.tenant_id)
-        con = connect(cfg.database_url, cfg.tenant_id)
+        # NB: schema is provisioned at deploy/migration time — NEVER run init_db (table-locking
+        # DDL) in the request/sync path; it deadlocks against the request's own open transaction.
+        con = connect(cfg.app_database_url, tenant_id)  # restricted role: RLS-scoped to this tenant
 
         _set(step="backfill", detail="fetching new bookmarks from X…")
-        added = xapi.backfill_via_api(con, cfg.x_client_id, incremental=True)
+        # Entitlement cap: free slice + purchased import_limit (None = unlimited/comped).
+        cap = storage.effective_import_cap(con, cfg.free_bookmark_limit)
+        n_posts = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+        purchased = storage.import_limit(con)
+        # Page the FULL timeline (non-incremental) when there's unfetched entitlement below the
+        # already-stored newest page — incremental would stop there and never reach older posts:
+        #  - purchased entitlement not yet filled (just bought more via the slider), or
+        #  - legacy comped/unlimited account still sitting at a partial (free-slice-sized) corpus.
+        if cap is None:
+            full_import = 0 < n_posts <= cfg.free_bookmark_limit
+        else:
+            full_import = purchased > 0 and 0 < n_posts < cap
+        added = xapi.backfill_via_api(con, cfg.x_client_id,
+                                      incremental=not full_import, max_total=cap)
         _set(added=added)
+
+        # Unused purchased capacity → question credits (the slider promise): if the timeline was
+        # exhausted below the cap, the surplus entitlement converts at the per-bookmark rate.
+        if cap is not None and purchased > 0:
+            total_now = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+            if total_now < cap:  # backfill stops at cap or exhaustion; below cap = exhausted
+                unused = min(cap - total_now, purchased)
+                if unused > 0:
+                    from . import pricing
+                    value = pricing.unused_import_to_credits_usd(unused, cfg.price_per_bookmark_usd)
+                    storage.reduce_import_limit(con, unused)
+                    row = con.execute("SELECT current_setting('app.current_tenant', true)").fetchone()
+                    storage.add_credits(con, row[0], value)
+                    _set(detail=f"imported everything — ${value:.2f} of unused import converted to credits")
 
         ai = BedrockAIClient(
             region=cfg.aws_region,
@@ -81,8 +109,8 @@ def _run(cfg: Config) -> None:
             _status["finished_at"] = time.time()
 
 
-def start() -> bool:
-    """Kick off a refill if one isn't already running. Returns True if it started."""
+def start(tenant_id: str | None = None) -> bool:
+    """Kick off a refill for a tenant (defaults to the config tenant). Returns True if it started."""
     with _lock:
         if _status["running"]:
             return False
@@ -91,14 +119,14 @@ def start() -> bool:
              "error": None, "started_at": time.time(), "finished_at": None}
         )
     cfg = Config.from_env()
+    tid = tenant_id or cfg.tenant_id
     if not cfg.x_client_id:
         _set(running=False, step="error",
              error="X_CLIENT_ID is not set in .env.", finished_at=time.time())
         return False
     from . import xapi
-    from .storage import connect, init_db
-    init_db(cfg.database_url, cfg.tenant_id)
-    _c = connect(cfg.database_url, cfg.tenant_id)
+    from .storage import connect
+    _c = connect(cfg.app_database_url, tid)
     try:
         connected = xapi.is_connected(_c)
     finally:
@@ -108,5 +136,5 @@ def start() -> bool:
              error="Not connected to X yet — click 'Connect X' on the home page first.",
              finished_at=time.time())
         return False
-    threading.Thread(target=_run, args=(cfg,), daemon=True).start()
+    threading.Thread(target=_run, args=(cfg, tid), daemon=True).start()
     return True
