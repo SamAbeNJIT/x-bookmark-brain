@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS posts (
     raw_json       text,                 -- original X payload, retained verbatim
     bm_rank        bigint,               -- bookmark-recency rank; higher = more recently saved
     label_attempted integer,             -- 1 once labeling has been tried
+    text_tsv       tsvector GENERATED ALWAYS AS (to_tsvector('english', coalesce(text, ''))) STORED,
     PRIMARY KEY (tenant_id, id),
     FOREIGN KEY (tenant_id, author_id) REFERENCES authors (tenant_id, id)
 );
@@ -195,6 +196,10 @@ _MIGRATIONS = (
     "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS credit_balance_usd double precision NOT NULL DEFAULT 0",
     "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS ingestion_paid boolean NOT NULL DEFAULT false",
     "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS import_limit integer NOT NULL DEFAULT 0",
+    # Hybrid search: lexical leg. Column must exist before the index (order matters here).
+    "ALTER TABLE posts ADD COLUMN IF NOT EXISTS text_tsv tsvector "
+    "GENERATED ALWAYS AS (to_tsvector('english', coalesce(text, ''))) STORED",
+    "CREATE INDEX IF NOT EXISTS posts_text_tsv_gin ON posts USING gin (text_tsv)",
 )
 
 
