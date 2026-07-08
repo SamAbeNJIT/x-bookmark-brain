@@ -18,6 +18,7 @@ BEDROCK_RATES_PER_1M: dict[str, tuple[float, float]] = {
     # Claude (text generation)
     "claude-opus-4-8": (5.00, 25.00),
     "claude-opus-4-7": (5.00, 25.00),
+    "claude-sonnet-5": (2.00, 10.00),   # from the Bedrock agreement rate card (cheaper than 4-6)
     "claude-sonnet-4-6": (3.00, 15.00),
     "claude-haiku-4-5": (1.00, 5.00),
     # Amazon Titan Text Embeddings (input only)

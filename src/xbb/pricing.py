@@ -13,8 +13,11 @@ MIN_CREDIT_TOPUP_USD = 5.00    # below this, Stripe's 30¢+2.9% fee eats the mar
 MAX_CREDIT_TOPUP_USD = 100.00
 
 # Monthly credit subscription: cheaper than buying one-time ("more bang for your buck").
+# $3.99 -> $7.50 of credits = 75 questions/mo (~5.3¢ effective vs 10¢ pay-per-question).
+# Profitable even at FULL utilization (~$2.48 serving cost at the real ~3.3¢/question), and the
+# daily free asks are consumed first so actual credit burn runs lower still.
 SUB_PRICE_USD = 3.99
-SUB_MONTHLY_CREDITS_USD = 5.00
+SUB_MONTHLY_CREDITS_USD = 7.50
 
 IMPORT_SLIDER_MIN = 500        # keeps every charge comfortably above Stripe's fee floor
 IMPORT_SLIDER_MAX = 20_000
