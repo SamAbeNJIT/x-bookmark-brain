@@ -58,6 +58,8 @@ def _apply_payment_event(con, event: dict) -> bool:
     account_id = obj.get("client_reference_id")
     meta = obj.get("metadata") or {}
     kind = meta.get("kind")
+    paid = (obj.get("amount_total") or 0) / 100.0
+    buyer = obj.get("customer_email") or (obj.get("customer_details") or {}).get("email") or account_id
     if account_id and kind == "import":
         try:
             count = int(meta.get("count", 0))
@@ -65,13 +67,21 @@ def _apply_payment_event(con, event: dict) -> bool:
             count = 0
         if count > 0:
             storage.add_import_limit(con, account_id, count)
+            _purchase_alert(f"{buyer} bought an import of up to {count:,} bookmarks (${paid:.2f})")
     elif account_id and kind == "ingestion":  # legacy fixed-price full unlock
         storage.set_ingestion_paid(con, account_id, True)
+        _purchase_alert(f"{buyer} bought the full-import unlock (${paid:.2f})")
     elif account_id and kind == "credits":
-        amount = (obj.get("amount_total") or 0) / 100.0  # cents → USD; credits are 1:1 with $ paid
-        if amount > 0:
-            storage.add_credits(con, account_id, amount)
+        if paid > 0:
+            storage.add_credits(con, account_id, paid)  # credits are 1:1 with $ paid
+            _purchase_alert(f"{buyer} topped up ${paid:.2f} of credits")
     return True
+
+
+def _purchase_alert(body: str) -> None:
+    cfg = Config.from_env()
+    mail.send_owner_alert("💰 x-bookmarks purchase", body, ses_sender=cfg.ses_sender,
+                          owner_email=cfg.owner_alert_email, region=cfg.aws_region)
 
 
 def _apply_invoice_event(con, event: dict) -> bool:
@@ -85,6 +95,8 @@ def _apply_invoice_event(con, event: dict) -> bool:
     account_id = meta.get("account_id")
     if meta.get("kind") == "credit_sub" and account_id:
         storage.add_credits(con, account_id, pricing.SUB_MONTHLY_CREDITS_USD)
+        _purchase_alert(f"subscription invoice paid — account {account_id} granted "
+                        f"${pricing.SUB_MONTHLY_CREDITS_USD:.2f} of monthly credits")
     return True
 
 
@@ -141,7 +153,12 @@ def create_app() -> FastAPI:
         email = auth.verify_login_token(token, cfg.session_secret)
         if not email:
             return authui.login_page(error="That sign-in link is invalid or expired.")
+        is_new = con.execute("SELECT 1 FROM accounts WHERE email = %s", (email,)).fetchone() is None
         account_id = storage.get_or_create_account(con, email)
+        if is_new:
+            mail.send_owner_alert("🆕 x-bookmarks signup", f"New account: {email}",
+                                  ses_sender=cfg.ses_sender,
+                                  owner_email=cfg.owner_alert_email, region=cfg.aws_region)
         session = auth.make_session_token(account_id, cfg.session_secret)
         resp = RedirectResponse("/", status_code=303)
         resp.set_cookie(SESSION_COOKIE, session, httponly=True, samesite="lax",

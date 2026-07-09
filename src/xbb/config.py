@@ -66,6 +66,8 @@ class Config:
     # Both optional — unset → tokens stored plaintext / magic link logged to console (local dev).
     kms_key_id: str | None
     ses_sender: str | None
+    # Ops alerts (new signups, purchases) go here; unset = console-log only (local dev).
+    owner_alert_email: str | None
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -97,4 +99,5 @@ class Config:
             stripe_credit_sub_price_id=os.getenv("STRIPE_CREDIT_SUB_PRICE_ID"),
             kms_key_id=os.getenv("KMS_KEY_ID"),
             ses_sender=os.getenv("SES_SENDER"),
+            owner_alert_email=os.getenv("OWNER_ALERT_EMAIL"),
         )

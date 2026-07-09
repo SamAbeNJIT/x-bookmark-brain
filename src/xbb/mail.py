@@ -18,6 +18,26 @@ def _body_html(link: str) -> str:
     )
 
 
+def send_owner_alert(subject: str, body: str, *, ses_sender: str | None,
+                     owner_email: str | None, region: str) -> None:
+    """Fire-and-forget ops alert to the owner (signups, purchases). Never raises: alerts must
+    never break the flow that triggered them. Unset owner_email/sender → console log (local)."""
+    try:
+        if not (ses_sender and owner_email):
+            print(f"[alert] {subject}: {body}", flush=True)
+            return
+        import boto3
+
+        boto3.client("ses", region_name=region).send_email(
+            Source=ses_sender,
+            Destination={"ToAddresses": [owner_email]},
+            Message={"Subject": {"Data": subject},
+                     "Body": {"Text": {"Data": body}}},
+        )
+    except Exception as e:  # pragma: no cover - best-effort by design
+        print(f"[alert] send failed ({type(e).__name__}): {subject}", flush=True)
+
+
 def send_login_link(email: str, link: str, *, ses_sender: str | None, region: str) -> None:
     """Email the magic link via SES, or log it to the console if SES isn't configured."""
     if not ses_sender:

@@ -104,6 +104,7 @@ def _point_at_test_db(monkeypatch):
     # Never touch real KMS/SES from the suite — use plaintext tokens + console magic links.
     monkeypatch.delenv("KMS_KEY_ID", raising=False)
     monkeypatch.delenv("SES_SENDER", raising=False)
+    monkeypatch.delenv("OWNER_ALERT_EMAIL", raising=False)  # alerts print, never email, in tests
     yield
 
 
