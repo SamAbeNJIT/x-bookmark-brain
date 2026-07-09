@@ -111,8 +111,8 @@ def ui_refresh_start(request: Request, con=Depends(get_db)):
 
 
 @ui_router.get("/ui/refresh")
-def ui_refresh():
-    s = jobs.status()
+def ui_refresh(request: Request):
+    s = jobs.status(resolve_tenant(request, Config.from_env()))
     running = s["running"]
     if s["error"]:
         state = f'<div class="answer" style="border-left-color:#d64545">⚠️ {esc(s["error"])}</div>'

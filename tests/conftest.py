@@ -101,6 +101,11 @@ def _point_at_test_db(monkeypatch):
     """Point Config.from_env() at the test DB and force local fallbacks (no real AWS) in tests."""
     if _HAVE_DB:
         monkeypatch.setenv("DATABASE_URL", _test_dsn())
+        # CRITICAL: also repoint the app-role DSN — jobs.start()/deps connect via APP_DATABASE_URL
+        # directly, and leaving it on prod let a gate test trigger REAL prod syncs from the suite.
+        app = os.environ.get("APP_DATABASE_URL")
+        if app:
+            monkeypatch.setenv("APP_DATABASE_URL", app.replace("/neondb?", "/neondb_test?"))
     # Never touch real KMS/SES from the suite — use plaintext tokens + console magic links.
     monkeypatch.delenv("KMS_KEY_ID", raising=False)
     monkeypatch.delenv("SES_SENDER", raising=False)
