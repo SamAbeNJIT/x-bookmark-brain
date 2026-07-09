@@ -237,6 +237,7 @@ _NAV_ITEMS = [
     ("/ui/taxonomy", "Taxonomy", "⚙"),
     ("/ui/refresh", "Sync", "↻"),
     ("/ui/billing", "Billing", "◈"),
+    ("/ui/feedback", "Feedback", "✉"),
 ]
 
 _SIDEBAR = (

@@ -46,3 +46,11 @@ def test_signed_in_sees_the_app_home(monkeypatch, seeded_db, fake_ai):
 def test_static_screenshots_served(monkeypatch, seeded_db, fake_ai):
     c = _client(monkeypatch, seeded_db, fake_ai)
     assert c.get("/static/feed.png").status_code == 200  # auth-exempt + mounted
+
+
+def test_feedback_form_submits(client):
+    r = client.get("/ui/feedback")
+    assert r.status_code == 200 and 'action="/ui/feedback"' in r.text
+    r = client.post("/ui/feedback", data={"message": "launch-night test feedback"})
+    assert r.status_code == 200
+    assert "thank you" in r.text.lower()  # alert email is best-effort console-log in tests

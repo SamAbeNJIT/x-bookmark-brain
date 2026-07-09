@@ -243,6 +243,34 @@ def ui_ask_post(question: str = Form(...), con=Depends(get_db), ai=Depends(get_a
     return page("Ask", form + body, wide=bool(retrieved))
 
 
+@ui_router.get("/ui/feedback")
+def ui_feedback():
+    body = (
+        "<p class=lead>Found a bug? Want a feature? Tell us — this goes straight to a human.</p>"
+        '<form method=post action="/ui/feedback">'
+        '<textarea name="message" required maxlength="4000" rows="6" placeholder="What\'s on your mind?" '
+        'style="width:100%;max-width:640px;padding:.8rem 1rem;font-size:1rem;font-family:inherit;'
+        'border:1px solid var(--line-2);border-radius:12px;background:var(--panel);box-shadow:var(--shadow)">'
+        "</textarea>"
+        '<div class=row style="margin-top:.6rem"><button>Send feedback</button></div></form>'
+    )
+    return page("Feedback", body)
+
+
+@ui_router.post("/ui/feedback")
+def ui_feedback_post(request: Request, message: str = Form(...), con=Depends(get_db)):
+    from . import mail
+    cfg = Config.from_env()
+    tenant = resolve_tenant(request, cfg)
+    sender = storage.get_account_email(con, tenant) or tenant
+    mail.send_owner_alert("💬 x-bookmarks feedback",
+                          f"From: {sender}\n\n{message[:4000]}",
+                          ses_sender=cfg.ses_sender,
+                          owner_email=cfg.owner_alert_email, region=cfg.aws_region)
+    return page("Feedback", '<div class="answer">💌 Got it — thank you! We read every one.</div>'
+                            '<p><a href="/ui/feedback">Send another</a></p>')
+
+
 @ui_router.get("/ui/categories")
 def ui_categories(con=Depends(get_db)):
     tree = categorize.category_tree(con)
