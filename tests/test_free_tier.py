@@ -32,7 +32,10 @@ def test_ask_uses_free_allowance_before_credits(client, db):
 
 
 class _FakePagedClient:
-    """Stands in for XApiClient: yields v2-shaped pages of 10 tweets each."""
+    """Stands in for XApiClient: yields v2-shaped pages of 10 tweets each, counting requests
+    (every page served = billed X-API reads, so overshooting pages costs real money)."""
+
+    pages_served = 0
 
     def __init__(self, con, client_id):
         self._pages = [
@@ -42,16 +45,22 @@ class _FakePagedClient:
         ]
 
     def iter_bookmark_pages(self):
-        yield from self._pages
+        for page in self._pages:
+            _FakePagedClient.pages_served += 1
+            yield page
 
 
 def test_backfill_caps_at_free_limit(db, monkeypatch):
     monkeypatch.setattr(xapi, "XApiClient", _FakePagedClient)
+    _FakePagedClient.pages_served = 0
     con = storage.connect(db)
     try:
         added = xapi.backfill_via_api(con, "cid", incremental=True, max_total=25)
         assert added == 25  # stopped mid-timeline at the free slice
         assert con.execute("SELECT COUNT(*) FROM posts").fetchone()[0] == 25
+        # Cost guarantee: never request a page past the entitlement (25 needs exactly 3 pages
+        # of 10 — a 4th request would be pure wasted X-API spend).
+        assert _FakePagedClient.pages_served == 3
     finally:
         con.close()
 

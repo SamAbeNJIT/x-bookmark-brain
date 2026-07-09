@@ -259,7 +259,9 @@ _SIDEBAR = (
 _ACTIVE_JS = (
     "<script>document.querySelectorAll('.sidebar nav a').forEach(function(a){"
     "var h=a.getAttribute('href');var p=location.pathname;"
-    "if(h===p||(h!=='/'&&p.indexOf(h)===0))a.classList.add('active');});</script>"
+    # exact match, or a true sub-path (h + '/'): plain prefix matching would light up
+    # /ui/feed while on /ui/feedback.
+    "if(h===p||(h!=='/'&&p.indexOf(h+'/')===0))a.classList.add('active');});</script>"
 )
 
 # Row-major masonry: distribute cards (in DOM/chronological order) into the shortest column,

@@ -213,6 +213,10 @@ def backfill_via_api(con, client_id: str, incremental: bool = True,
                 total += 1
                 new_ids.append(rec["id"])
         con.commit()
+        # Stop BEFORE requesting another page once the entitlement is exactly full — each page
+        # fetched is ~100 billed X-API reads, so overshooting by a page doubles a free user's cost.
+        if max_total is not None and total >= max_total:
+            capped = True
         if capped or (incremental and new_in_page == 0):
             break
     # bm_rank (bookmark order; higher = saved more recently):
