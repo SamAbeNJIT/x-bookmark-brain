@@ -45,6 +45,8 @@ def legend(groups: list[tuple[str, int]], active: str | None = None) -> str:
     return f'<div class="legend">{"".join(chips)}</div>'
 
 _HEAD = (
+    '<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">'
+    '<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">'
     '<link rel="preconnect" href="https://fonts.googleapis.com">'
     '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
     '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?'

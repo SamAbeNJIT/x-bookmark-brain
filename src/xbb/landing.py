@@ -68,6 +68,8 @@ def landing_page() -> HTMLResponse:
 <meta name=viewport content='width=device-width, initial-scale=1'>
 <title>x-bookmarks.ai — unlock the knowledge within your personal vault</title>
 <meta name=description content="Import your X bookmarks, let AI organize them into your own topics, then search by meaning or just ask — with answers cited from your saved posts.">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <style>{_CSS}</style></head><body>
 <div class=wrap>
 <nav><span class=brand>bookmark<span class=dot>.</span>brain</span>
