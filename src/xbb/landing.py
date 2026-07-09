@@ -150,7 +150,8 @@ def landing_page() -> HTMLResponse:
 <footer>
   <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a> ·
   <a href="mailto:support@x-bookmarks.ai">support@x-bookmarks.ai</a><br>
-  Bookmarks are fetched with your permission via X's official API. Your library is private to you.
+  Bookmarks are fetched with your permission via X's official API. Your library is private to you.<br>
+  Not affiliated with X Corp.
 </footer>
 </div></body></html>"""
     return HTMLResponse(html)

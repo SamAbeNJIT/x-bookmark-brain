@@ -248,7 +248,8 @@ _SIDEBAR = (
     + "</nav>"
     '<div class="side-foot">private · AI-searched<br>'
     '<a href="/terms" style="color:inherit">terms</a> · '
-    '<a href="/privacy" style="color:inherit">privacy</a></div>'
+    '<a href="/privacy" style="color:inherit">privacy</a><br>'
+    "not affiliated with X Corp.</div>"
     "</aside>"
 )
 
