@@ -66,7 +66,7 @@ footer a { color:inherit; }
 def landing_page() -> HTMLResponse:
     html = f"""<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content='width=device-width, initial-scale=1'>
-<title>x-bookmarks.ai — your X bookmarks, finally useful</title>
+<title>x-bookmarks.ai — unlock the knowledge within your personal vault</title>
 <meta name=description content="Import your X bookmarks, let AI organize them into your own topics, then search by meaning or just ask — with answers cited from your saved posts.">
 <style>{_CSS}</style></head><body>
 <div class=wrap>
@@ -74,7 +74,7 @@ def landing_page() -> HTMLResponse:
 <a class=signin href="/login">Sign in</a></nav>
 
 <div class=hero>
-  <h1>Your X bookmarks,<br>finally useful.</h1>
+  <h1>Unlock the knowledge within<br>your personal vault.</h1>
   <p class=sub>You saved thousands of posts you'll never scroll back to. Import them, let AI
   organize them into <b>your</b> topics, then search by meaning — or just ask a question and get
   an answer cited from your own bookmarks.</p>
