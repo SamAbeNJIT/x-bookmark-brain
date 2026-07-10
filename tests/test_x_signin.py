@@ -9,7 +9,11 @@ from xbb import jobs, storage, xauth
 
 @pytest.fixture(autouse=True)
 def _clean_accounts(db):
-    """Accounts persist in the shared test DB — remove this suite's identities between tests."""
+    """Accounts persist in the shared test DB — remove this suite's identities between tests.
+    Also reset in-process job state: earlier suites leave the default tenant's status non-idle,
+    which would mask the first-run states under a full-suite run."""
+    with jobs._lock:
+        jobs._jobs.clear()
     def _purge():
         con = storage.connect(db)
         try:

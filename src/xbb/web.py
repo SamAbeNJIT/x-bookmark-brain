@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from . import auth, authui, billing, categorize, credits, legal, mail, pricing, storage
 from .config import Config
 from .deps import SESSION_COOKIE, get_ai, get_db
+from .log import logger
 from .search import index_posts, search
 from .storage import connect
 from .templates import esc, page
