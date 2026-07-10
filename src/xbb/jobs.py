@@ -15,6 +15,7 @@ import time
 from typing import Any
 
 from .config import Config
+from .log import logger
 
 _lock = threading.Lock()
 _IDLE: dict[str, Any] = {
@@ -47,6 +48,7 @@ def _run(cfg: Config, tenant_id: str) -> None:
     from .storage import connect
 
     con = None
+    logger.info("sync.start tenant=%s", tenant_id)
     try:
         con = connect(cfg.app_database_url, tenant_id)  # restricted role: RLS-scoped tenant
 
@@ -64,6 +66,7 @@ def _run(cfg: Config, tenant_id: str) -> None:
         added = xapi.backfill_via_api(con, cfg.x_client_id,
                                       incremental=not full_import, max_total=cap)
         _set(tenant_id, added=added)
+        logger.info("sync.backfill tenant=%s added=%d cap=%s", tenant_id, added, cap)
 
         # Unused purchased capacity → question credits (the slider promise).
         if cap is not None and purchased > 0:
@@ -86,9 +89,11 @@ def _run(cfg: Config, tenant_id: str) -> None:
             reasoning_model=cfg.bedrock_reasoning_model,
         )
 
+        logger.info("sync.index tenant=%s", tenant_id)
         _set(tenant_id, step="index", detail="embedding new posts…")
         index_posts(con, ai, progress=lambda d, t: _set(tenant_id, detail=f"embedding {d}/{t}"))
 
+        logger.info("sync.categorize tenant=%s", tenant_id)
         _set(tenant_id, step="categorize", detail="labeling new posts…")
         if not categorize.get_taxonomy(con):
             categorize.save_taxonomy(con, categorize.derive_taxonomy(con, ai))
@@ -101,7 +106,9 @@ def _run(cfg: Config, tenant_id: str) -> None:
                                  usage.cost_of(e["model"], e["input_tokens"], e["output_tokens"]))
 
         _set(tenant_id, step="done", detail=f"up to date — {added} new bookmark(s) added")
+        logger.info("sync.done tenant=%s added=%d", tenant_id, added)
     except Exception as e:  # surface any failure to the UI instead of dying silently
+        logger.exception("sync.error tenant=%s: %s", tenant_id, e)  # full traceback -> CloudWatch
         _set(tenant_id, step="error", error=f"{type(e).__name__}: {e}")
     finally:
         if con is not None:

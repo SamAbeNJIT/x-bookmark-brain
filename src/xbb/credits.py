@@ -13,6 +13,7 @@ from typing import Any
 import psycopg
 
 from . import storage
+from .log import logger
 from .ai import AIClient
 from .ask import ask
 
@@ -38,6 +39,7 @@ def ask_charged(
     free_asks_per_day: int = 0,
 ) -> dict[str, Any]:
     used_free = free_asks_per_day > 0 and storage.use_free_ask(con, free_asks_per_day)
+    logger.info("ask.request price=%.2f", ask_price_usd)
     if not used_free and not storage.debit_credits(con, ask_price_usd):
         raise OutOfCredits()
     try:

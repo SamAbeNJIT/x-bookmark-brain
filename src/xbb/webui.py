@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from . import auth, authui, categorize, credits, jobs, landing, mail, storage, xapi, xauth
 from .config import Config
 from .deps import get_ai, get_db, resolve_tenant
+from .log import logger
 from .search import search
 from .templates import esc, legend, md_lite, page, parent_color, post_card
 
@@ -99,8 +100,7 @@ def oauth_signin(con=Depends(get_db)):
 def _signin_callback(code: str, state: str, error: str, con) -> RedirectResponse | HTMLResponse:
     """Complete sign-in-with-X: exchange the code, identify the user, find-or-create their
     account, store the (already-granted!) bookmark token under their tenant, set the session,
-    and — for brand-new accounts — kick off the free import immediately: one tap from the ad
-    to an organizing library."""
+    and land new accounts on the Sync page's free-100 offer (no auto-sync — consent first)."""
     if error:
         return authui.login_page(error=f"X sign-in was cancelled ({error}). Try again, or use email.")
     verifier = storage.pop_pkce(con, state)
@@ -117,6 +117,7 @@ def _signin_callback(code: str, state: str, error: str, con) -> RedirectResponse
     created = account_id is None
     if created:
         account_id = storage.create_account_from_x(con, x_id, handle)
+    logger.info("auth.x_signin tenant=%s handle=@%s created=%s", account_id, handle, created)
     tcon = storage.connect(cfg.app_database_url, account_id)  # token belongs to THEIR tenant
     try:
         xapi.save_tokens(tcon, tok)

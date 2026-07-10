@@ -67,6 +67,7 @@ def _apply_payment_event(con, event: dict) -> bool:
             count = 0
         if count > 0:
             storage.add_import_limit(con, account_id, count)
+            logger.info("billing.import_paid tenant=%s count=%d paid=%.2f", account_id, count, paid)
             _purchase_alert(f"{buyer} bought an import of up to {count:,} bookmarks (${paid:.2f})")
     elif account_id and kind == "ingestion":  # legacy fixed-price full unlock
         storage.set_ingestion_paid(con, account_id, True)
@@ -78,6 +79,7 @@ def _apply_payment_event(con, event: dict) -> bool:
             except (TypeError, ValueError):
                 grant = paid
             storage.add_credits(con, account_id, max(grant, paid))
+            logger.info("billing.credits_paid tenant=%s paid=%.2f grant=%.2f", account_id, paid, grant)
             _purchase_alert(f"{buyer} paid ${paid:.2f} for ${max(grant, paid):.2f} of credits")
     return True
 
@@ -159,6 +161,7 @@ def create_app() -> FastAPI:
             return authui.login_page(error="That sign-in link is invalid or expired.")
         is_new = con.execute("SELECT 1 FROM accounts WHERE email = %s", (email,)).fetchone() is None
         account_id = storage.get_or_create_account(con, email)
+        logger.info("auth.email_signin tenant=%s created=%s", account_id, is_new)
         if is_new:
             mail.send_owner_alert("🆕 x-bookmarks signup", f"New account: {email}",
                                   ses_sender=cfg.ses_sender,
