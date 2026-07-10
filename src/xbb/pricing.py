@@ -2,8 +2,8 @@
 
 The import slider sells an ENTITLEMENT of "up to N most-recent bookmarks" without knowing the
 user's true count (counting via the X API would cost ~$0.005/bookmark for every curious signup).
-If their corpus turns out smaller than N, the unused capacity converts to ask-credits at the
-same per-bookmark rate (see jobs) — so a dollar paid is never lost, just re-denominated.
+If their corpus turns out smaller than N, the unused portion is REFUNDED automatically after
+the sync (see jobs) — users only ever pay for bookmarks they actually have.
 """
 
 from __future__ import annotations
@@ -32,11 +32,6 @@ IMPORT_SLIDER_STEP = 100
 def import_price_usd(n: int, free_limit: int, per_bookmark_usd: float) -> float:
     """Price for an entitlement of `n` total bookmarks; the free slice is deducted."""
     return round(max(0, n - free_limit) * per_bookmark_usd, 2)
-
-
-def unused_import_to_credits_usd(unused_bookmarks: int, per_bookmark_usd: float) -> float:
-    """Dollar value of unused import capacity, converted to ask-credits (same rate as paid)."""
-    return round(max(0, unused_bookmarks) * per_bookmark_usd, 2)
 
 
 def credits_for_topup(amount_usd: float) -> float:

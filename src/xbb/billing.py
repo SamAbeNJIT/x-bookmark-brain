@@ -57,7 +57,7 @@ def create_checkout_session(
 def create_payment_session(
     api_key: str,
     price_id: str,
-    customer_email: str,
+    customer_email: str | None,
     client_reference_id: str,
     success_url: str,
     cancel_url: str,
@@ -68,16 +68,20 @@ def create_payment_session(
     Used for the prepaid model: a one-off ingestion charge or a credit-pack purchase. ``metadata``
     (e.g. ``{"kind": "ingestion"}`` or ``{"kind": "credits"}``) is echoed on the completed-session
     webhook so the app knows what was bought; ``client_reference_id`` links it to the account.
+    ``customer_email=None`` lets Stripe collect the buyer's real address.
     """
     stripe.api_key = api_key
+    kwargs: dict = {}
+    if customer_email:
+        kwargs["customer_email"] = customer_email
     session = stripe.checkout.Session.create(
         mode="payment",
         line_items=[{"price": price_id, "quantity": 1}],
-        customer_email=customer_email,
         client_reference_id=client_reference_id,
         success_url=success_url,
         cancel_url=cancel_url,
         metadata=metadata,
+        **kwargs,
     )
     return session.url
 
@@ -114,7 +118,7 @@ def create_amount_session(
     api_key: str,
     amount_usd: float,
     product_name: str,
-    customer_email: str,
+    customer_email: str | None,
     client_reference_id: str,
     success_url: str,
     cancel_url: str,
@@ -124,8 +128,14 @@ def create_amount_session(
 
     Used for the import slider (price computed from the chosen bookmark count) and custom
     credit top-ups. Same webhook contract as ``create_payment_session``.
+
+    ``customer_email=None`` (e.g. an X-sign-in account with no email yet) omits the prefill so
+    Stripe collects the buyer's real address — the webhook then saves it onto the account.
     """
     stripe.api_key = api_key
+    kwargs: dict = {}
+    if customer_email:
+        kwargs["customer_email"] = customer_email
     session = stripe.checkout.Session.create(
         mode="payment",
         line_items=[{
@@ -136,13 +146,21 @@ def create_amount_session(
             },
             "quantity": 1,
         }],
-        customer_email=customer_email,
         client_reference_id=client_reference_id,
         success_url=success_url,
         cancel_url=cancel_url,
         metadata=metadata,
+        **kwargs,
     )
     return session.url
+
+
+def refund_payment(api_key: str, payment_intent: str, amount_usd: float):
+    """Partially (or fully) refund a payment — the import true-up: users only pay for the
+    bookmarks they actually had. Caller decides the amount; this just moves the money."""
+    stripe.api_key = api_key
+    return stripe.Refund.create(payment_intent=payment_intent,
+                                amount=int(round(amount_usd * 100)))
 
 
 def construct_event(payload: bytes, sig_header: str, webhook_secret: str):

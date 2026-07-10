@@ -60,7 +60,14 @@ def _apply_payment_event(con, event: dict) -> bool:
     meta = obj.get("metadata") or {}
     kind = meta.get("kind")
     paid = (obj.get("amount_total") or 0) / 100.0
-    buyer = obj.get("customer_email") or (obj.get("customer_details") or {}).get("email") or account_id
+    buyer_email = obj.get("customer_email") or (obj.get("customer_details") or {}).get("email")
+    buyer = buyer_email or account_id
+    # Opportunistic email capture: X-sign-in accounts have no email until Stripe collects one.
+    if account_id and buyer_email and not storage.get_account_email(con, account_id):
+        if storage.set_account_email(con, account_id, buyer_email):
+            logger.info("billing.email_captured tenant=%s", account_id)
+        else:
+            logger.info("billing.email_capture_conflict tenant=%s", account_id)
     if account_id and kind == "import":
         try:
             count = int(meta.get("count", 0))
@@ -68,6 +75,8 @@ def _apply_payment_event(con, event: dict) -> bool:
             count = 0
         if count > 0:
             storage.add_import_limit(con, account_id, count)
+            # Remember the payment so the sync's true-up can refund unused capacity.
+            storage.set_import_payment(con, account_id, obj.get("payment_intent"), paid)
             logger.info("billing.import_paid tenant=%s count=%d paid=%.2f", account_id, count, paid)
             _purchase_alert(f"{buyer} bought an import of up to {count:,} bookmarks (${paid:.2f})")
     elif account_id and kind == "ingestion":  # legacy fixed-price full unlock
@@ -219,8 +228,8 @@ def create_app() -> FastAPI:
                 body += (
                     "<p><b>Import more of your history</b> — pick how many of your most recent "
                     f"bookmarks to unlock ({cents}¢ each; your first {cfg.free_bookmark_limit} are free). "
-                    "Have fewer than you pick? <b>The difference converts to question credits</b> "
-                    "automatically.</p>"
+                    "Have fewer than you pick? <b>The difference is refunded to your card</b> "
+                    "automatically — you only pay for bookmarks you actually have.</p>"
                     '<form method=post action="/billing/checkout">'
                     '<input type=hidden name=kind value="import">'
                     f'<input type=range name=count id=imp_n min={pricing.IMPORT_SLIDER_MIN} '
@@ -267,7 +276,9 @@ def create_app() -> FastAPI:
         if not cfg.stripe_secret_key:
             return RedirectResponse("/ui/billing", status_code=303)
         account_id = _current_account(request, cfg)
-        email = storage.get_account_email(con, account_id) or "local@bookmarkbrain.app"
+        # None (X-sign-in account, no email yet) → Stripe collects the real one at checkout
+        # and the webhook saves it back onto the account.
+        email = storage.get_account_email(con, account_id)
         base = str(request.base_url).rstrip("/")
         common = dict(api_key=cfg.stripe_secret_key, customer_email=email,
                       client_reference_id=account_id,

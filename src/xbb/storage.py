@@ -53,7 +53,9 @@ CREATE TABLE IF NOT EXISTS accounts (
     monthly_quota_usd     double precision, -- per-account cap; NULL = use the config default
     credit_balance_usd    double precision NOT NULL DEFAULT 0,   -- prepaid credits, drawn down by asks
     ingestion_paid        boolean NOT NULL DEFAULT false,        -- legacy/comped: TRUE = unlimited import
-    import_limit          integer NOT NULL DEFAULT 0             -- purchased entitlement beyond the free slice
+    import_limit          integer NOT NULL DEFAULT 0,            -- purchased entitlement beyond the free slice
+    import_payment_intent text,              -- latest import purchase (for the unused-refund true-up)
+    import_paid_usd       double precision   -- $ paid on that purchase
 );
 
 CREATE TABLE IF NOT EXISTS authors (
@@ -207,6 +209,9 @@ _MIGRATIONS = (
     "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS x_handle text",
     "ALTER TABLE accounts ALTER COLUMN email DROP NOT NULL",
     "CREATE UNIQUE INDEX IF NOT EXISTS accounts_x_user_id_key ON accounts (x_user_id)",
+    # Refund-the-unused import true-up: remember the latest import payment.
+    "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS import_payment_intent text",
+    "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS import_paid_usd double precision",
 )
 
 
@@ -297,6 +302,38 @@ def get_or_create_account(con: psycopg.Connection, email: str) -> str:
 def get_account_email(con: psycopg.Connection, account_id: str) -> str | None:
     row = con.execute("SELECT email FROM accounts WHERE id = %s", (account_id,)).fetchone()
     return row[0] if row else None
+
+
+def set_account_email(con: psycopg.Connection, account_id: str, email: str) -> bool:
+    """Attach an email to an email-less account (captured from Stripe checkout). Guarded so it
+    never overwrites an existing email; if another account already owns the address (unique),
+    skip quietly — capture is opportunistic, never a failure path. Returns True if saved."""
+    try:
+        cur = con.execute(
+            "UPDATE accounts SET email = %s WHERE id = %s AND email IS NULL",
+            (email, account_id))
+        con.commit()
+        return cur.rowcount > 0
+    except psycopg.errors.UniqueViolation:
+        con.rollback()
+        return False
+
+
+def set_import_payment(con: psycopg.Connection, account_id: str,
+                       payment_intent: str | None, paid_usd: float | None) -> None:
+    """Remember (or clear, with Nones) the latest import purchase for the refund true-up.
+    Latest overwrites previous — one outstanding true-up at a time."""
+    con.execute("UPDATE accounts SET import_payment_intent = %s, import_paid_usd = %s WHERE id = %s",
+                (payment_intent, paid_usd, account_id))
+    con.commit()
+
+
+def get_import_payment(con: psycopg.Connection) -> tuple[str | None, float]:
+    """The current tenant's outstanding import purchase (RLS-safe read via own row lookup)."""
+    row = con.execute(
+        "SELECT import_payment_intent, import_paid_usd FROM accounts "
+        "WHERE id = current_setting('app.current_tenant', true)::uuid").fetchone()
+    return (row[0], float(row[1] or 0)) if row else (None, 0.0)
 
 
 def account_by_x_user_id(con: psycopg.Connection, x_user_id: str) -> str | None:

@@ -18,6 +18,13 @@ import time
 from typing import Any, Protocol
 
 
+def _category_target(sample_count: int) -> int:
+    """How many categories to derive for a corpus sample: ~1 per 20 bookmarks, floor of 4.
+    The sample is capped at 500 (categorize.derive_taxonomy), so this tops out at ~25 —
+    growth deliberately stops there (owner's call: chunky trees beat a million slivers)."""
+    return max(4, sample_count // 20)
+
+
 def _tax_names(taxonomy: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Taxonomy with only name + definition (drop the numeric id) so the labeler answers
     with category names, not ids — and to trim input tokens."""
@@ -154,9 +161,11 @@ class BedrockAIClient:
         return payload["content"][0]["text"]
 
     def derive_taxonomy(self, samples: list[str]) -> list[dict[str, str]]:  # pragma: no cover
+        target = _category_target(len(samples))
         system = (
-            "You organize a user's saved X posts. Propose 10-25 categories that cover the "
-            "sample. Reply with ONLY a JSON array of {\"name\", \"definition\"} objects."
+            f"You organize a user's saved X posts. Propose about {target} categories (a couple "
+            "more or fewer is fine) that cover the sample — broad enough that each holds several "
+            "posts. Reply with ONLY a JSON array of {\"name\", \"definition\"} objects."
         )
         user = "Sample posts:\n" + "\n---\n".join(samples)
         return _extract_json(self._invoke_claude(self.reasoning_model, system, user))
