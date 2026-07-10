@@ -42,7 +42,9 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE IF NOT EXISTS accounts (
     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),  -- this id IS the tenant_id
-    email      text UNIQUE NOT NULL,
+    email      text UNIQUE,               -- nullable: X-sign-in accounts may have no email yet
+    x_user_id  text,                      -- X account id (sign-in-with-X identity; unique via index)
+    x_handle   text,                      -- @username for alerts/UI display
     created_at timestamptz NOT NULL DEFAULT now(),
     plan       text NOT NULL DEFAULT 'free',
     subscription_status   text,        -- 'active' | 'past_due' | 'canceled' | NULL
@@ -200,6 +202,11 @@ _MIGRATIONS = (
     "ALTER TABLE posts ADD COLUMN IF NOT EXISTS text_tsv tsvector "
     "GENERATED ALWAYS AS (to_tsvector('english', coalesce(text, ''))) STORED",
     "CREATE INDEX IF NOT EXISTS posts_text_tsv_gin ON posts USING gin (text_tsv)",
+    # Sign in with X: X identity on accounts; email becomes optional (X-only accounts).
+    "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS x_user_id text",
+    "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS x_handle text",
+    "ALTER TABLE accounts ALTER COLUMN email DROP NOT NULL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS accounts_x_user_id_key ON accounts (x_user_id)",
 )
 
 
@@ -290,6 +297,35 @@ def get_or_create_account(con: psycopg.Connection, email: str) -> str:
 def get_account_email(con: psycopg.Connection, account_id: str) -> str | None:
     row = con.execute("SELECT email FROM accounts WHERE id = %s", (account_id,)).fetchone()
     return row[0] if row else None
+
+
+def account_by_x_user_id(con: psycopg.Connection, x_user_id: str) -> str | None:
+    """Account id for an X identity (sign-in-with-X lookup, pre-tenant → no RLS on accounts)."""
+    row = con.execute("SELECT id FROM accounts WHERE x_user_id = %s", (x_user_id,)).fetchone()
+    return str(row[0]) if row else None
+
+
+def create_account_from_x(con: psycopg.Connection, x_user_id: str, x_handle: str | None) -> str:
+    """First X sign-in: create an email-less account keyed by the X identity."""
+    row = con.execute(
+        "INSERT INTO accounts (x_user_id, x_handle) VALUES (%s, %s) RETURNING id",
+        (x_user_id, x_handle),
+    ).fetchone()
+    con.commit()
+    return str(row[0])
+
+
+def set_account_x_identity(con: psycopg.Connection, account_id: str,
+                           x_user_id: str, x_handle: str | None) -> None:
+    """Link an X identity to an existing (e.g. email) account, so a later 'Sign in with X'
+    lands in the same account. Best-effort: if another account already claims the identity
+    (unique index), keep the existing claim rather than fail the caller's flow."""
+    try:
+        con.execute("UPDATE accounts SET x_user_id = %s, x_handle = %s WHERE id = %s",
+                    (x_user_id, x_handle, account_id))
+        con.commit()
+    except psycopg.errors.UniqueViolation:
+        con.rollback()
 
 
 # --------------------------------------------------------------------------- billing / plan

@@ -11,7 +11,7 @@ import json
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from . import auth, categorize, credits, jobs, landing, storage, xapi, xauth
+from . import auth, authui, categorize, credits, jobs, landing, mail, storage, xapi, xauth
 from .config import Config
 from .deps import get_ai, get_db, resolve_tenant
 from .search import search
@@ -80,8 +80,65 @@ def oauth_login(con=Depends(get_db)):
     )
 
 
+@ui_router.get("/oauth/signin")
+def oauth_signin(con=Depends(get_db)):
+    """Sign in with X (anonymous entry): same PKCE dance as connect, but the 'si_' state
+    prefix routes the shared callback into account creation instead of token attach.
+    Anonymous request → get_db resolves the DEFAULT tenant, where the verifier is stashed."""
+    cfg = Config.from_env()
+    if not cfg.x_client_id:
+        return page("Sign in", "<p class=muted>X_CLIENT_ID is not set.</p>")
+    verifier, challenge = xauth.make_pkce()
+    state = "si_" + xauth.make_state()
+    storage.set_pkce(con, state, verifier)
+    return RedirectResponse(
+        xauth.authorize_url(cfg.x_client_id, cfg.x_redirect_uri, state, challenge), status_code=307
+    )
+
+
+def _signin_callback(code: str, state: str, error: str, con) -> RedirectResponse | HTMLResponse:
+    """Complete sign-in-with-X: exchange the code, identify the user, find-or-create their
+    account, store the (already-granted!) bookmark token under their tenant, set the session,
+    and — for brand-new accounts — kick off the free import immediately: one tap from the ad
+    to an organizing library."""
+    if error:
+        return authui.login_page(error=f"X sign-in was cancelled ({error}). Try again, or use email.")
+    verifier = storage.pop_pkce(con, state)
+    if not verifier or not code:
+        return authui.login_page(error="Sign-in expired or invalid — please try again.")
+    cfg = Config.from_env()
+    try:
+        tok = xauth.exchange_code(cfg.x_client_id, cfg.x_redirect_uri, code, verifier)
+        me = xauth.fetch_me(tok["access_token"])
+    except Exception as e:
+        return authui.login_page(error=f"X sign-in failed ({type(e).__name__}) — please try again.")
+    x_id, handle = str(me["id"]), me.get("username")
+    account_id = storage.account_by_x_user_id(con, x_id)
+    created = account_id is None
+    if created:
+        account_id = storage.create_account_from_x(con, x_id, handle)
+    tcon = storage.connect(cfg.app_database_url, account_id)  # token belongs to THEIR tenant
+    try:
+        xapi.save_tokens(tcon, tok)
+    finally:
+        tcon.close()
+    if created:
+        mail.send_owner_alert("🆕 x-bookmarks signup", f"New account via Sign in with X: @{handle}",
+                              ses_sender=cfg.ses_sender,
+                              owner_email=cfg.owner_alert_email, region=cfg.aws_region)
+        jobs.start(account_id)  # their 100 free bookmarks start organizing before they blink
+    session = auth.make_session_token(account_id, cfg.session_secret)
+    resp = RedirectResponse(url="/ui/refresh" if created else "/", status_code=303)
+    resp.set_cookie("xbb_session", session, httponly=True, samesite="lax",
+                    max_age=auth.SESSION_MAX_AGE_S)
+    return resp
+
+
 @ui_router.get("/oauth/callback")
-def oauth_callback(code: str = "", state: str = "", error: str = "", con=Depends(get_db)):
+def oauth_callback(request: Request, code: str = "", state: str = "", error: str = "",
+                   con=Depends(get_db)):
+    if state.startswith("si_"):  # sign-in-with-X shares the registered redirect URI
+        return _signin_callback(code, state, error, con)
     if error:
         return page("Connect X", f'<div class="answer" style="border-left-color:#d64545">X denied the connection: {esc(error)}</div>')
     verifier = storage.pop_pkce(con, state)
@@ -93,6 +150,12 @@ def oauth_callback(code: str = "", state: str = "", error: str = "", con=Depends
         xapi.save_tokens(con, tok)
     except Exception as e:
         return page("Connect X", f'<div class="answer" style="border-left-color:#d64545">Token exchange failed: {esc(type(e).__name__)}. Check the app settings (Native/public client, redirect URI).</div>')
+    try:  # link the X identity so a later "Sign in with X" lands in this same account
+        me = xauth.fetch_me(tok["access_token"])
+        storage.set_account_x_identity(con, resolve_tenant(request, cfg),
+                                       str(me["id"]), me.get("username"))
+    except Exception:
+        pass  # linking is best-effort; the connect itself already succeeded
     return RedirectResponse(url="/ui/refresh", status_code=303)
 
 

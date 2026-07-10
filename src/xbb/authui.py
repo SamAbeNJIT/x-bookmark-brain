@@ -27,12 +27,18 @@ def login_page(error: str | None = None) -> HTMLResponse:
         else ""
     )
     body = (
-        "<p class=lead>Sign in with a magic link — enter your email and we'll send you a "
-        "one-tap link. No password to remember.</p>"
-        + err
-        + '<form method=post action="/auth/request" class="narrow">'
+        err
+        + '<p class=lead>One tap with your X account — your bookmarks start organizing '
+        "immediately.</p>"
+        '<a href="/oauth/signin" style="display:inline-block;background:#16161a;color:#fff;'
+        "font-weight:700;font-size:1.05rem;padding:.85rem 1.7rem;border-radius:12px;"
+        'text-decoration:none">Continue with 𝕏</a>'
+        '<p class=muted style="margin:.7rem 0 1.6rem;font-size:.88rem">Official X sign-in — '
+        "we never see your password, and your bookmarks stay private to you.</p>"
+        '<p class=muted style="margin-bottom:.4rem">Or use a magic link by email:</p>'
+        '<form method=post action="/auth/request" class="narrow">'
         f'<input type=email name=email placeholder="you@example.com" '
-        f'autocomplete=email required autofocus style="{_EMAIL_INPUT}">'
+        f'autocomplete=email required style="{_EMAIL_INPUT}">'
         '<div class=row style="margin-top:.6rem"><button>Send magic link</button></div>'
         "</form>"
     )

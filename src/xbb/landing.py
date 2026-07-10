@@ -82,6 +82,9 @@ def landing_page() -> HTMLResponse:
   an answer cited from your own bookmarks.</p>
   <a class=cta href="/login">Start free</a>
   <div class=freeline>Your 100 most recent bookmarks + 5 questions a day, free. No card needed.</div>
+  <div class=freeline style="margin-top:.35rem">🔒 <b>Private by design</b> — your library is
+  visible only to you. Official X sign-in; we can read your bookmarks, never post or touch
+  anything else.</div>
 </div>
 
 <section>

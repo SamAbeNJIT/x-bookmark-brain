@@ -68,6 +68,20 @@ def exchange_code(client_id: str, redirect_uri: str, code: str, verifier: str) -
     return resp.json()  # {access_token, refresh_token, expires_in, token_type, scope}
 
 
+def fetch_me(access_token: str) -> dict[str, Any]:
+    """Identify the just-authorized user (one /users/me read): {id, username, name}.
+    Sign-in-with-X uses this to key the account before any tenant exists."""
+    import httpx
+
+    resp = httpx.get(
+        "https://api.twitter.com/2/users/me",
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=30.0,
+    )
+    resp.raise_for_status()
+    return resp.json()["data"]
+
+
 def refresh_token(client_id: str, refresh: str) -> dict[str, Any]:
     """Get a fresh access token using the stored refresh token."""
     import httpx
