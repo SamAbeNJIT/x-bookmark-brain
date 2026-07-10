@@ -73,8 +73,12 @@ def _apply_payment_event(con, event: dict) -> bool:
         _purchase_alert(f"{buyer} bought the full-import unlock (${paid:.2f})")
     elif account_id and kind == "credits":
         if paid > 0:
-            storage.add_credits(con, account_id, paid)  # credits are 1:1 with $ paid
-            _purchase_alert(f"{buyer} topped up ${paid:.2f} of credits")
+            try:  # pack bonus computed at checkout, carried in metadata; fall back to $ paid
+                grant = float(meta.get("grant") or paid)
+            except (TypeError, ValueError):
+                grant = paid
+            storage.add_credits(con, account_id, max(grant, paid))
+            _purchase_alert(f"{buyer} paid ${paid:.2f} for ${max(grant, paid):.2f} of credits")
     return True
 
 
@@ -230,28 +234,24 @@ def create_app() -> FastAPI:
 
         # --- credits: custom one-time + subscription ---
         if cfg.stripe_secret_key:
-            per_dollar = int(round(1 / cfg.ask_price_usd)) if cfg.ask_price_usd else 0
+            cents = int(round(cfg.ask_price_usd * 100))
+            tiers = " · ".join(f"${floor:.0f}+ adds +{bonus:.0%}"
+                               for floor, bonus in sorted(pricing.CREDIT_PACK_BONUS))
+            # question count for the live readout: (amount * (1+bonus)) / price, bonus in JS
+            js_bonus = "(v>=20?1.3:v>=10?1.2:v>=5?1.1:1)"
             body += (
-                f'<div style="margin-top:1.4rem"><b>Top up credits</b> — $1 buys {per_dollar} questions'
+                f'<div style="margin-top:1.4rem"><b>Buy questions</b> — {cents}¢ each, '
+                f"bigger packs get bonus questions: {tiers}"
                 '<form method=post action="/billing/checkout" class=row style="margin-top:.4rem">'
                 '<input type=hidden name=kind value="credits">'
                 f'<input type=number name=amount min={pricing.MIN_CREDIT_TOPUP_USD:.0f} '
                 f'max={pricing.MAX_CREDIT_TOPUP_USD:.0f} step=1 value=10 '
                 'style="width:6rem;padding:.5rem;border-radius:8px;border:1px solid var(--line-2)" '
-                "oninput=\"document.getElementById('topup_q').textContent="
-                f"Math.round(this.value*{per_dollar})\"> "
-                f'<span class=muted>= <b id=topup_q>{10 * per_dollar}</b> questions</span> '
-                "<button>Buy credits</button></form></div>"
+                "oninput=\"var v=Number(this.value)||0;document.getElementById('topup_q').textContent="
+                f"Math.floor(v*{js_bonus}/{cfg.ask_price_usd})\"> "
+                f'<span class=muted>= <b id=topup_q>{int(pricing.credits_for_topup(10) / cfg.ask_price_usd) if cfg.ask_price_usd else 0}</b> questions</span> '
+                "<button>Buy questions</button></form></div>"
             )
-            if cfg.stripe_credit_sub_price_id:
-                sub_q = int(pricing.SUB_MONTHLY_CREDITS_USD / cfg.ask_price_usd) if cfg.ask_price_usd else 0
-                body += (
-                    f'<div style="margin-top:1rem"><b>Or subscribe & save:</b> '
-                    f"${pricing.SUB_PRICE_USD:.2f}/mo gets you <b>{sub_q} questions every month</b>."
-                    '<form method=post action="/billing/checkout" style="margin-top:.4rem">'
-                    '<input type=hidden name=kind value="subscribe">'
-                    "<button>Subscribe</button></form></div>"
-                )
         else:
             body += "<p class=muted>Billing isn't configured.</p>"
         return page("Billing", body)
@@ -278,18 +278,16 @@ def create_app() -> FastAPI:
                 amount_usd=price,
                 product_name=f"Import your {n:,} most recent bookmarks — x-bookmarks.ai",
                 metadata={"kind": "import", "count": str(n), "account_id": account_id}, **common)
-        elif kind == "subscribe":
-            if not cfg.stripe_credit_sub_price_id:
-                return RedirectResponse("/ui/billing", status_code=303)
-            url = billing.create_subscription_session(
-                price_id=cfg.stripe_credit_sub_price_id,
-                subscription_metadata={"kind": "credit_sub", "account_id": account_id}, **common)
         elif kind == "credits":
+            # 2026-07-10 pivot: subscriptions are gone; packs grant bonus credits instead.
             amt = max(pricing.MIN_CREDIT_TOPUP_USD,
                       min(float(amount or 0), pricing.MAX_CREDIT_TOPUP_USD))
+            grant = pricing.credits_for_topup(amt)
+            q = int(grant / cfg.ask_price_usd) if cfg.ask_price_usd else 0
             url = billing.create_amount_session(
-                amount_usd=amt, product_name=f"${amt:.2f} of question credits — x-bookmarks.ai",
-                metadata={"kind": "credits", "account_id": account_id}, **common)
+                amount_usd=amt, product_name=f"{q} questions (${grant:.2f} of credits) — x-bookmarks.ai",
+                metadata={"kind": "credits", "grant": f"{grant:.2f}",
+                          "account_id": account_id}, **common)
         else:  # legacy fixed-price full unlock
             if not cfg.stripe_ingest_price_id:
                 return RedirectResponse("/ui/billing", status_code=303)

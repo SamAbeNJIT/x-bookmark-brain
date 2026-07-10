@@ -57,6 +57,6 @@ def test_ask_route_works_and_debits_when_funded(client, db, monkeypatch):
     assert "credit balance is empty" not in body["answer"].lower()    # a real answer
     con = storage.connect(db)
     try:
-        assert abs(storage.credit_balance(con) - 0.90) < 1e-9  # charged one $0.10 ask
+        assert abs(storage.credit_balance(con) - 0.95) < 1e-9  # charged one $0.05 ask
     finally:
         con.close()

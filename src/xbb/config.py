@@ -91,7 +91,7 @@ class Config:
             stripe_webhook_secret=os.getenv("STRIPE_WEBHOOK_SECRET"),
             stripe_ingest_price_id=os.getenv("STRIPE_INGEST_PRICE_ID"),
             stripe_credit_price_id=os.getenv("STRIPE_CREDIT_PRICE_ID"),
-            ask_price_usd=float(os.getenv("ASK_PRICE_USD", "0.10")),
+            ask_price_usd=float(os.getenv("ASK_PRICE_USD", "0.05")),  # 2026-07-10 pivot: 10¢ -> 5¢
             ingestion_price_usd=float(os.getenv("INGESTION_PRICE_USD", "9.99")),
             free_bookmark_limit=int(os.getenv("FREE_BOOKMARK_LIMIT", "100")),
             free_asks_per_day=int(os.getenv("FREE_ASKS_PER_DAY", "5")),

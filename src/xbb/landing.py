@@ -145,9 +145,9 @@ def landing_page() -> HTMLResponse:
     <div class="price hot"><div class=amt>1¢</div><div class=per>per bookmark, one-time</div>
       <ul><li>Unlock your <b>entire</b> history</li><li>Pick how much to import — from $4</li>
       <li>Unused capacity becomes question credits</li></ul></div>
-    <div class=price><div class=amt>$3.99</div><div class=per>per month</div>
-      <ul><li>75 questions every month</li><li>~47% off pay-as-you-go</li>
-      <li>Or top up anytime: $1 = 10 questions</li></ul></div>
+    <div class=price><div class=amt>5¢</div><div class=per>per question</div>
+      <ul><li>No subscription — pay only for what you ask</li><li>$1 ≈ 20 questions</li>
+      <li>Bigger packs get up to 30% bonus questions</li></ul></div>
   </div>
   <div style="text-align:center;margin-top:1.8rem"><a class=cta href="/login">Start free</a></div>
 </section>

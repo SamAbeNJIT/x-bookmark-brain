@@ -8,14 +8,19 @@ same per-bookmark rate (see jobs) — so a dollar paid is never lost, just re-de
 
 from __future__ import annotations
 
-# One-time credit top-ups convert 1:1 (a dollar buys a dollar of asks).
+# Credit top-ups (2026-07-10 pivot: pay-per-question ONLY — no subscription). Base rate is a
+# flat 5¢/question; bigger packs grant BONUS credits instead of a lower unit price, so the
+# effective per-question price never dips below serving cost (~3.3¢ avg, ~5.3¢ max today).
 MIN_CREDIT_TOPUP_USD = 5.00    # below this, Stripe's 30¢+2.9% fee eats the margin
 MAX_CREDIT_TOPUP_USD = 100.00
+CREDIT_PACK_BONUS = (          # (minimum amount, bonus fraction) — checked top down
+    (20.0, 0.30),              # $20+ -> +30% bonus questions (effective ~3.8¢)
+    (10.0, 0.20),              # $10+ -> +20% (~4.2¢)
+    (5.0, 0.10),               # $5+  -> +10% (~4.5¢)
+)
 
-# Monthly credit subscription: cheaper than buying one-time ("more bang for your buck").
-# $3.99 -> $7.50 of credits = 75 questions/mo (~5.3¢ effective vs 10¢ pay-per-question).
-# Profitable even at FULL utilization (~$2.48 serving cost at the real ~3.3¢/question), and the
-# daily free asks are consumed first so actual credit burn runs lower still.
+# Legacy subscription constants: removed from sale 2026-07-10 (zero subscribers at the time).
+# The webhook grant path stays so any straggler invoice would still be honored.
 SUB_PRICE_USD = 3.99
 SUB_MONTHLY_CREDITS_USD = 7.50
 
@@ -35,5 +40,8 @@ def unused_import_to_credits_usd(unused_bookmarks: int, per_bookmark_usd: float)
 
 
 def credits_for_topup(amount_usd: float) -> float:
-    """One-time top-up: 1:1 dollars → credits."""
+    """Credits granted for a top-up: dollars paid plus the pack bonus tier."""
+    for floor, bonus in CREDIT_PACK_BONUS:
+        if amount_usd >= floor:
+            return round(amount_usd * (1 + bonus), 2)
     return round(amount_usd, 2)

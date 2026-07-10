@@ -16,7 +16,11 @@ def test_import_price_math():
     assert pricing.import_price_usd(500, 100, 0.01) == 4.00
     assert pricing.import_price_usd(100, 100, 0.01) == 0.0     # all free
     assert pricing.unused_import_to_credits_usd(300, 0.01) == 3.00
-    assert pricing.credits_for_topup(12.34) == 12.34
+    # Pack bonuses (2026-07-10 pivot): +10% at $5, +20% at $10, +30% at $20; none below $5.
+    assert pricing.credits_for_topup(4.99) == 4.99
+    assert pricing.credits_for_topup(5.00) == 5.50
+    assert pricing.credits_for_topup(12.34) == 14.81
+    assert pricing.credits_for_topup(20.00) == 26.00
 
 
 def _post_event(client, event, secret):
