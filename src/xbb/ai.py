@@ -59,6 +59,10 @@ class AIClient(Protocol):
         """Multi-label a post against the approved taxonomy."""
         ...
 
+    def group_categories(self, names: list[str]) -> dict[str, str]:
+        """Group category names into 4-8 parent themes: {category_name: parent_name}."""
+        ...
+
     def assign_categories_batch(
         self, posts: list[dict[str, Any]], taxonomy: list[dict[str, str]]
     ) -> list[list[str]]:
@@ -156,6 +160,22 @@ class BedrockAIClient:
         )
         user = "Sample posts:\n" + "\n---\n".join(samples)
         return _extract_json(self._invoke_claude(self.reasoning_model, system, user))
+
+    def group_categories(self, names: list[str]) -> dict[str, str]:  # pragma: no cover
+        system = (
+            "Group these bookmark categories into 4-8 broad parent themes (e.g. \"AI & "
+            "Engineering\", \"Health & Longevity\", \"Culture & Media\"). Every category "
+            "must appear in exactly one theme. Reply with ONLY a JSON object mapping "
+            "{\"parent theme\": [\"category\", ...]}."
+        )
+        grouped = _extract_json(self._invoke_claude(
+            self.labeling_model, system, "Categories:\n" + "\n".join(names)))
+        out: dict[str, str] = {}
+        for parent, kids in (grouped or {}).items():
+            for kid in kids:
+                if kid in names:
+                    out[kid] = parent
+        return out
 
     def assign_categories(self, text: str, taxonomy: list[dict[str, str]]) -> list[str]:  # pragma: no cover
         system = (

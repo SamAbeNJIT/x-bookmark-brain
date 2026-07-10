@@ -56,3 +56,20 @@ def test_merge_moves_assignments(seeded_db, fake_ai):
         assert counts == {"RAG": 3}
     finally:
         con.close()
+
+
+def test_derive_parents_groups_unparented_categories(db, fake_ai):
+    """New tenants' AI-derived category names never match DEFAULT_PARENTS — derive_parents
+    must group them so the tree doesn't collapse into one giant 'Other'."""
+    con = connect(db)
+    try:
+        categorize.save_taxonomy(con, [{"name": "Quantum Basket Weaving", "definition": "x"},
+                                       {"name": "Competitive Napping", "definition": "y"}])
+        assert categorize.derive_parents(con, fake_ai) == 2
+        parents = {r[0]: r[1] for r in con.execute(
+            "SELECT name, parent FROM categories WHERE name IN "
+            "('Quantum Basket Weaving','Competitive Napping')")}
+        assert set(parents.values()) == {"Test Theme"}
+        assert categorize.derive_parents(con, fake_ai) == 0  # idempotent no-op once parented
+    finally:
+        con.close()

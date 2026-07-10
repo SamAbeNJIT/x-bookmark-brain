@@ -54,6 +54,10 @@ class FakeAI:
             out.append(v + [0.0] * (1024 - len(v)))
         return out
 
+    def group_categories(self, names):
+        # Deterministic: everything groups under one fake parent theme.
+        return {n: "Test Theme" for n in names}
+
     def derive_taxonomy(self, samples):
         return [
             {"name": "RAG", "definition": "retrieval-augmented generation"},

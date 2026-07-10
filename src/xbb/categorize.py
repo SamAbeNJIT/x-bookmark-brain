@@ -227,6 +227,23 @@ def apply_default_parents(con: psycopg.Connection) -> int:
     return n
 
 
+def derive_parents(con: psycopg.Connection, ai: AIClient) -> int:
+    """AI-group any UNPARENTED categories into parent themes (per-tenant taxonomies never
+    match the hardcoded DEFAULT_PARENTS names — without this, every new user's tree collapses
+    into one giant 'Other'). No-op when everything already has a parent. Returns rows set."""
+    names = [r[0] for r in con.execute("SELECT name FROM categories WHERE parent IS NULL")]
+    if not names:
+        return 0
+    mapping = ai.group_categories(names)
+    n = 0
+    for name, parent in mapping.items():
+        if parent:
+            n += con.execute("UPDATE categories SET parent = %s WHERE name = %s AND parent IS NULL",
+                             (parent.strip(), name)).rowcount
+    con.commit()
+    return n
+
+
 def category_tree(con: psycopg.Connection) -> list[dict[str, Any]]:
     """Group categories under their parent for the tree view.
 

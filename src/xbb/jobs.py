@@ -98,6 +98,7 @@ def _run(cfg: Config, tenant_id: str) -> None:
         if not categorize.get_taxonomy(con):
             categorize.save_taxonomy(con, categorize.derive_taxonomy(con, ai))
         categorize.apply_default_parents(con)
+        categorize.derive_parents(con, ai)  # per-tenant parent themes (no-op if all parented)
         categorize.assign_unassigned(
             con, ai, progress=lambda d, t: _set(tenant_id, detail=f"labeling {d}/{t}"))
 
