@@ -46,16 +46,16 @@ def _signin(client):
     return client.get(f"/oauth/callback?code=abc&state={state}", follow_redirects=False)
 
 
-def test_first_x_signin_creates_account_session_and_import(client, db, fake_x):
+def test_first_x_signin_creates_account_and_session_no_autosync(client, db, fake_x):
     r = _signin(client)
     assert r.status_code == 303 and r.headers["location"] == "/ui/refresh"
     assert "xbb_session" in r.headers.get("set-cookie", "")
+    assert fake_x == []                     # owner's call: never sync without a button press
     con = storage.connect(db)
     try:
         row = con.execute(
             "SELECT id, x_handle, email FROM accounts WHERE x_user_id = '9001'").fetchone()
         assert row is not None and row[1] == "adclicker" and row[2] is None
-        assert fake_x == [str(row[0])]      # free import kicked off for the new tenant
         # the bookmark token was stored under THEIR tenant (one-tap connect)
         tok = con.execute(
             "SELECT value FROM sync_state WHERE tenant_id = %s AND key = 'x_oauth'",
@@ -65,7 +65,7 @@ def test_first_x_signin_creates_account_session_and_import(client, db, fake_x):
         con.close()
 
 
-def test_second_x_signin_reuses_account_no_new_import(client, db, fake_x):
+def test_second_x_signin_reuses_account(client, db, fake_x):
     _signin(client)
     r = _signin(client)                      # same X identity signs in again
     assert r.status_code == 303 and r.headers["location"] == "/"   # returning user -> home
@@ -75,7 +75,7 @@ def test_second_x_signin_reuses_account_no_new_import(client, db, fake_x):
         assert n == 1                        # no duplicate account
     finally:
         con.close()
-    assert len(fake_x) == 1                  # import only auto-started on creation
+    assert fake_x == []                      # still no un-asked-for syncs
 
 
 def test_x_signin_links_to_existing_email_account(client, db, fake_x):
@@ -103,3 +103,21 @@ def test_cancelled_signin_returns_to_login(client, fake_x):
     r = client.get("/oauth/callback?state=si_whatever&error=access_denied",
                    follow_redirects=False)
     assert r.status_code == 200 and "cancelled" in r.text
+
+
+def test_first_run_sync_page_adapts_to_login_method(client, db, fake_x, monkeypatch):
+    from xbb import xapi as xapi_mod
+    con = storage.connect(db)
+    try:  # first-run = zero posts; the client fixture seeds a few, so clear them
+        con.execute("DELETE FROM posts"); con.commit()
+    finally:
+        con.close()
+    # Magic-link user (not connected): the page routes them to Connect X, no sync button.
+    monkeypatch.setattr(xapi_mod, "is_connected", lambda con: False)
+    r = client.get("/ui/refresh")
+    assert "Connect X" in r.text and "Sync now" not in r.text
+    # X-sign-in user (already connected): free-100 offer with an explicit button, no auto-run.
+    monkeypatch.setattr(xapi_mod, "is_connected", lambda con: True)
+    r = client.get("/ui/refresh")
+    assert "free" in r.text.lower() and "Sync my first" in r.text
+    assert fake_x == []                      # rendering the page never starts a job

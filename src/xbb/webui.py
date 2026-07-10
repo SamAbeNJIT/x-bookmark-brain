@@ -126,7 +126,8 @@ def _signin_callback(code: str, state: str, error: str, con) -> RedirectResponse
         mail.send_owner_alert("🆕 x-bookmarks signup", f"New account via Sign in with X: @{handle}",
                               ses_sender=cfg.ses_sender,
                               owner_email=cfg.owner_alert_email, region=cfg.aws_region)
-        jobs.start(account_id)  # their 100 free bookmarks start organizing before they blink
+        # NO auto-sync (owner's call): land them on the Sync page with the free-100 offer and
+        # let them press the button themselves — consent beats surprise.
     session = auth.make_session_token(account_id, cfg.session_secret)
     resp = RedirectResponse(url="/ui/refresh" if created else "/", status_code=303)
     resp.set_cookie("xbb_session", session, httponly=True, samesite="lax",
@@ -174,9 +175,15 @@ def ui_refresh_start(request: Request, con=Depends(get_db)):
 
 
 @ui_router.get("/ui/refresh")
-def ui_refresh(request: Request):
-    s = jobs.status(resolve_tenant(request, Config.from_env()))
+def ui_refresh(request: Request, con=Depends(get_db)):
+    cfg = Config.from_env()
+    s = jobs.status(resolve_tenant(request, cfg))
     running = s["running"]
+    # First-run: adapt to HOW they signed up. X sign-in already granted bookmark access
+    # (one tap = connected); magic-link users still need the Connect X step first.
+    first_run = (not running and s["step"] in ("idle",)
+                 and con.execute("SELECT COUNT(*) FROM posts").fetchone()[0] == 0)
+    btn_label = "Syncing…" if running else "↻ Sync now"
     if s["error"]:
         state = f'<div class="answer" style="border-left-color:#d64545">⚠️ {esc(s["error"])}</div>'
     elif s["step"] == "done":
@@ -187,10 +194,24 @@ def ui_refresh(request: Request):
             "<br><span class=muted>This page refreshes automatically…</span></div>"
             "<script>setTimeout(function(){location.reload()},3000)</script>"
         )
+    elif first_run and not xapi.is_connected(con):
+        state = (
+            f"<p class=lead>Two taps to your organized library: connect your X account, then "
+            f"sync your <b>{cfg.free_bookmark_limit} most recent bookmarks — free</b>.</p>"
+            '<p><a class="stat" style="display:inline-block;text-decoration:none" '
+            'href="/oauth/login"><b style="font-size:1rem">Connect X →</b>'
+            "<span>official sign-in, read-only bookmark access</span></a></p>"
+        )
+        return page("Sync", state)  # no sync button until connected
+    elif first_run:
+        state = (
+            f"<p class=lead>🎉 You're connected. Sync your <b>{cfg.free_bookmark_limit} most "
+            f"recent bookmarks — free</b> and watch the AI organize them.</p>"
+        )
+        btn_label = f"Sync my first {cfg.free_bookmark_limit} bookmarks (free)"
     else:
         state = '<p class=lead>Pull, embed and label any bookmarks added since the last sync.</p>'
 
-    btn_label = "Syncing…" if running else "↻ Sync now"
     disabled = " disabled" if running else ""
     form = (
         f'<form method=post action="/ui/refresh"><button{disabled}>{btn_label}</button></form>'
