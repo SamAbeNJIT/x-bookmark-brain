@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS assignments (
     tenant_id   uuid NOT NULL DEFAULT {_TENANT_DEFAULT},
     post_id     text NOT NULL,
     category_id bigint NOT NULL REFERENCES categories (id),
+    confidence  double precision,                   -- labeler's fit score (NULL = pre-confidence rows)
     PRIMARY KEY (tenant_id, post_id, category_id)   -- multi-label, one row per (post, category)
 );
 
@@ -212,6 +213,8 @@ _MIGRATIONS = (
     # Refund-the-unused import true-up: remember the latest import payment.
     "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS import_payment_intent text",
     "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS import_paid_usd double precision",
+    # Confidence-gated labeling: store the labeler's fit score per assignment.
+    "ALTER TABLE assignments ADD COLUMN IF NOT EXISTS confidence double precision",
 )
 
 

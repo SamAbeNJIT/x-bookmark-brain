@@ -67,7 +67,11 @@ class FakeAI:
     def assign_categories(self, text, taxonomy):
         tl = text.lower()
         names = [c["name"] for c in taxonomy if c["name"].lower() in tl]
-        return names or [taxonomy[0]["name"]]
+        # Vocabulary hits are confident; the fallback first-category guess is not-quite-sure
+        # but still above categorize.CONFIDENCE_MIN, so legacy tests keep their assignments.
+        if names:
+            return [{"name": n, "confidence": 0.9} for n in names]
+        return [{"name": taxonomy[0]["name"], "confidence": 0.6}]
 
     def assign_categories_batch(self, posts, taxonomy):
         return [self.assign_categories(p["text"], taxonomy) for p in posts]

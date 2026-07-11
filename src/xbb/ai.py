@@ -31,6 +31,28 @@ def _tax_names(taxonomy: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{"name": c["name"], "definition": c.get("definition")} for c in taxonomy]
 
 
+def _norm_labels(raw: Any) -> list[dict[str, Any]]:
+    """Normalize a model's label list to [{name, confidence}, ...].
+
+    Accepts {"name", "confidence"} objects (the asked-for format) and bare strings (models
+    occasionally regress to the old format under load) — a bare name means the model didn't
+    hedge, so it gets confidence 1.0. Confidence is clamped to [0, 1]; malformed items dropped.
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in raw:
+        if isinstance(item, str):
+            out.append({"name": item, "confidence": 1.0})
+        elif isinstance(item, dict) and isinstance(item.get("name"), str):
+            try:
+                conf = float(item.get("confidence", 1.0))
+            except (TypeError, ValueError):
+                conf = 1.0
+            out.append({"name": item["name"], "confidence": min(max(conf, 0.0), 1.0)})
+    return out
+
+
 def _extract_json(text: str) -> Any:
     """Parse JSON from a model reply that may include prose or ```json fences.
 
@@ -62,8 +84,8 @@ class AIClient(Protocol):
         """Propose a starter taxonomy: [{name, definition}, ...]."""
         ...
 
-    def assign_categories(self, text: str, taxonomy: list[dict[str, str]]) -> list[str]:
-        """Multi-label a post against the approved taxonomy."""
+    def assign_categories(self, text: str, taxonomy: list[dict[str, str]]) -> list[dict[str, Any]]:
+        """Multi-label a post against the approved taxonomy: [{name, confidence}, ...]."""
         ...
 
     def group_categories(self, names: list[str]) -> dict[str, str]:
@@ -72,7 +94,7 @@ class AIClient(Protocol):
 
     def assign_categories_batch(
         self, posts: list[dict[str, Any]], taxonomy: list[dict[str, str]]
-    ) -> list[list[str]]:
+    ) -> list[list[dict[str, Any]]]:
         """Multi-label several posts in one call. Returns labels aligned to `posts` order."""
         ...
 
@@ -186,21 +208,23 @@ class BedrockAIClient:
                     out[kid] = parent
         return out
 
-    def assign_categories(self, text: str, taxonomy: list[dict[str, str]]) -> list[str]:  # pragma: no cover
+    def assign_categories(self, text: str, taxonomy: list[dict[str, str]]) -> list[dict[str, Any]]:  # pragma: no cover
         system = (
-            "Assign the post to one or more of the given categories. Reply with ONLY a JSON "
-            "array of category names, chosen strictly from the provided taxonomy."
+            "Assign the post to one or more of the given categories — only categories it "
+            "genuinely fits; do not force a fit. Reply with ONLY a JSON array of "
+            "{\"name\", \"confidence\"} objects, name chosen strictly from the provided "
+            "taxonomy and confidence between 0 and 1 (how well the post fits that category)."
         )
         user = f"Taxonomy: {json.dumps(_tax_names(taxonomy))}\n\nPost:\n{text}"
         try:
             result = _extract_json(self._invoke_claude(self.labeling_model, system, user))
         except ValueError:
             return []  # e.g. a URL-only post → model replies in prose, not JSON; no labels
-        return [c for c in result if isinstance(c, str)] if isinstance(result, list) else []
+        return _norm_labels(result)
 
     def assign_categories_batch(  # pragma: no cover
         self, posts: list[dict[str, Any]], taxonomy: list[dict[str, str]]
-    ) -> list[list[str]]:
+    ) -> list[list[dict[str, Any]]]:
         # Label many posts in ONE Claude call to cut cost/latency: the taxonomy (the bulk of
         # the input) is sent once per batch instead of once per post.
         if not posts:
@@ -210,19 +234,21 @@ class BedrockAIClient:
             text = (p.get("text") or "").replace("\n", " ").strip()[:500]
             lines.append(f"[{i}] {text}")
         system = (
-            "Multi-label each numbered post against the taxonomy. Reply with ONLY a JSON "
-            "object mapping each post number (as a string) to an array of category names "
-            "chosen strictly from the taxonomy. Include every number; use [] if none fit."
+            "Multi-label each numbered post against the taxonomy — only categories a post "
+            "genuinely fits; do not force a fit. Reply with ONLY a JSON object mapping each "
+            "post number (as a string) to an array of {\"name\", \"confidence\"} objects, "
+            "name chosen strictly from the taxonomy and confidence between 0 and 1 (how well "
+            "the post fits). Include every number; use [] if none fit."
         )
         user = f"Taxonomy: {json.dumps(_tax_names(taxonomy))}\n\nPosts:\n" + "\n".join(lines)
         try:
             result = _extract_json(self._invoke_claude(self.labeling_model, system, user, max_tokens=4096))
         except ValueError:
             return [[] for _ in posts]
-        out: list[list[str]] = []
+        out: list[list[dict[str, Any]]] = []
         for i in range(1, len(posts) + 1):
             v = result.get(str(i)) if isinstance(result, dict) else None
-            out.append([c for c in v if isinstance(c, str)] if isinstance(v, list) else [])
+            out.append(_norm_labels(v))
         return out
 
     def answer(self, question: str, retrieved: list[dict[str, Any]]) -> dict[str, Any]:  # pragma: no cover

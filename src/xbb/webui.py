@@ -393,7 +393,7 @@ def ui_categories(con=Depends(get_db)):
         body += (
             '<div class="tree"><a class="child" href="/ui/unlabeled" '
             'style="margin-left:0;border-left-color:#9aa0ab">'
-            '<span class="grow">Unlabeled</span>'
+            '<span class="grow">Unsorted</span>'
             f'<span class="badge">{n_unlabeled:,}</span></a></div>'
         )
     return page("Categories", body)
@@ -462,15 +462,16 @@ def ui_unlabeled(con=Depends(get_db)):
     total = categorize.unlabeled_count(con)
     shown = f"first {len(posts):,} of {total:,}" if total > len(posts) else f"{total:,}"
     note = (
-        f"<p class=lead>{shown} posts with no category — a mix of image-only / bare-link "
-        "bookmarks (no text to work with) and ones the labeler skipped. Newest first.</p>"
+        f"<p class=lead>{shown} posts without a confident category — image-only / bare-link "
+        "bookmarks (no text to work with) and ones that didn't clearly fit any topic. "
+        "Newest first.</p>"
     )
     cards = (
         f'<div class="cards">{"".join(post_card(p) for p in posts)}</div>'
         if posts
-        else "<p class=muted>Nothing unlabeled.</p>"
+        else "<p class=muted>Nothing unsorted.</p>"
     )
-    return page("Unlabeled", note + cards)
+    return page("Unsorted", note + cards)
 
 
 @ui_router.get("/ui/taxonomy")

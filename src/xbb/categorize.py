@@ -74,6 +74,17 @@ def merge_categories(con: psycopg.Connection, source_id: int, target_id: int) ->
 
 # --- #6: multi-label assignment + browse ----------------------------------------------
 
+# Labels below this confidence are dropped instead of written: a weak least-bad fit pollutes
+# its category page, whereas an unassigned post lands honestly in the Unsorted bucket
+# (/ui/unlabeled). 0.5 = "the model itself thinks it's a coin flip or worse".
+CONFIDENCE_MIN = 0.5
+
+
+def _confident(labels: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep only labels at or above CONFIDENCE_MIN."""
+    return [l for l in labels if l.get("confidence", 1.0) >= CONFIDENCE_MIN]
+
+
 def _labelable(text: str | None) -> bool:
     """Heuristic: does this post have enough real text to be worth a single-post retry?
     Filters out image-only / bare-link posts (which always come back empty)."""
@@ -91,15 +102,15 @@ def assign_post(con: psycopg.Connection, ai: AIClient, post_id: str) -> list[str
     taxonomy = get_taxonomy(con)
     name_to_id = {c["name"]: c["id"] for c in taxonomy}
     applied = []
-    for name in ai.assign_categories(row[0], taxonomy):
-        category_id = name_to_id.get(name)
+    for label in _confident(ai.assign_categories(row[0], taxonomy)):
+        category_id = name_to_id.get(label["name"])
         if category_id is not None:
             con.execute(
-                "INSERT INTO assignments (post_id, category_id) VALUES (%s, %s) "
+                "INSERT INTO assignments (post_id, category_id, confidence) VALUES (%s, %s, %s) "
                 "ON CONFLICT DO NOTHING",
-                (post_id, category_id),
+                (post_id, category_id, label.get("confidence")),
             )
-            applied.append(name)
+            applied.append(label["name"])
     con.commit()
     return applied
 
@@ -138,14 +149,14 @@ def assign_unassigned(
     taxonomy = get_taxonomy(con)
     name_to_id = {c["name"]: c["id"] for c in taxonomy}
 
-    def _write(post_id: str, names: list[str]) -> None:
-        for name in names:
-            category_id = name_to_id.get(name)
+    def _write(post_id: str, labels: list[dict[str, Any]]) -> None:
+        for label in _confident(labels):
+            category_id = name_to_id.get(label["name"])
             if category_id is not None:
                 con.execute(
-                    "INSERT INTO assignments (post_id, category_id) VALUES (%s, %s) "
-                    "ON CONFLICT DO NOTHING",
-                    (post_id, category_id),
+                    "INSERT INTO assignments (post_id, category_id, confidence) "
+                    "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                    (post_id, category_id, label.get("confidence")),
                 )
 
     processed = 0
@@ -158,7 +169,9 @@ def assign_unassigned(
         except Exception:
             labels = [[] for _ in chunk]
         for (post_id, text), names in zip(chunk, labels):
-            if not names and _labelable(text):  # batch dropped a real post — retry once
+            # Retry when the batch produced nothing usable — including "labels exist but all
+            # below the confidence cutoff" (the single-post pass is more thorough).
+            if not _confident(names) and _labelable(text):
                 try:
                     names = ai.assign_categories(text, taxonomy)
                 except Exception:
