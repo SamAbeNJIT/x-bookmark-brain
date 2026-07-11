@@ -300,18 +300,16 @@ class BedrockAIClient:
     ) -> dict[str, Any]:  # pragma: no cover
         system = (
             "Answer the question using ONLY the provided saved posts, considering the prior "
-            "conversation for context. Be concise: a focused answer around 100-150 words "
-            "(more only if the question truly demands it) — the cited posts sit right next "
-            "to your answer, so summarize and point, don't retell. Cite the posts you use "
-            "by their id. Reply with ONLY JSON: {\"answer\": str, \"citations\": [post_id]}."
+            "conversation for context. Match your length to the question: answer as fully as "
+            "it deserves, but don't pad. Cite the posts you use by their id. Reply with ONLY "
+            "JSON: {\"answer\": str, \"citations\": [post_id]}."
         )
         # Send only what the model needs (id/handle/text) — the full dicts (urls, avatars,
         # media json) roughly double the input tokens for zero answer quality.
         slim = [{"id": r.get("id"), "handle": r.get("handle"),
                  "text": (r.get("text") or "")[:800]} for r in retrieved]
         user = f"Question: {question}\n\nPosts:\n{json.dumps(slim)}"
-        raw = self._invoke_claude(self.reasoning_model, system, user,
-                                  max_tokens=1024, history=history)
+        raw = self._invoke_claude(self.reasoning_model, system, user, history=history)
         try:
             result = _extract_json(raw)
         except ValueError:
