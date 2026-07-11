@@ -297,14 +297,18 @@ def _thread_html(history: list[dict[str, str]]) -> str:
     bubbles = []
     for t in history:
         if t["role"] == "user":
-            # Air above each question separates it from the preceding answer card; it stays
-            # snug to its own answer below (owner: questions felt squished between cards).
-            bubbles.append(f'<div class="answer" style="background:transparent;border:none;'
-                           f'box-shadow:none;margin:1.4rem 0 .4rem;padding:0;'
-                           f'font-weight:600">{esc(t["content"])}</div>')
+            bubbles.append(_question_card(t["content"]))
         else:
             bubbles.append(f'<div class="answer">{md_lite(t["content"])}</div>')
     return '<div class="thread">' + "".join(bubbles) + "</div>"
+
+
+def _question_card(text: str) -> str:
+    """A question in the thread gets its own accent-tinted card (owner: plain text got lost
+    while scrolling between answer cards)."""
+    return (f'<div class="answer" style="background:var(--accent-soft);'
+            f'color:var(--accent-ink);border-radius:12px;padding:.7rem 1rem;'
+            f'margin:1.6rem 0 .5rem;font-weight:600">{esc(text)}</div>')
 
 
 @ui_router.get("/ui/ask")
@@ -355,9 +359,7 @@ def ui_ask_post(question: str = Form(...), history: str = Form(""),
     cards = "".join(_card(p) for p in retrieved)
     # Prior turns render compactly above; the latest question + answer are the main event.
     thread = _thread_html(turns)
-    latest_q = (f'<div class="answer" style="background:transparent;border:none;'
-                f'box-shadow:none;margin:1.4rem 0 .4rem;padding:0;'
-                f'font-weight:600">{esc(question)}</div>')
+    latest_q = _question_card(question)
     answer = f'<div class="answer">{md_lite(result.get("answer"))}</div>'
     if retrieved:
         # Two-pane: the answer sticks on the left while the source bookmarks scroll on the right.
