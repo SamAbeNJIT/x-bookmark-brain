@@ -66,8 +66,8 @@ footer a { color:inherit; }
 def landing_page() -> HTMLResponse:
     html = f"""<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content='width=device-width, initial-scale=1'>
-<title>x-bookmarks.ai — unlock the knowledge within your personal vault</title>
-<meta name=description content="Import your X bookmarks, let AI organize them into your own topics, then search by meaning or just ask — with answers cited from your saved posts.">
+<title>x-bookmarks.ai: unlock the knowledge within your personal vault</title>
+<meta name=description content="Import your X bookmarks, let AI organize them into your own topics, then search by meaning or just ask, with answers cited from your saved posts.">
 <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <style>{_CSS}</style></head><body>
@@ -78,11 +78,11 @@ def landing_page() -> HTMLResponse:
 <div class=hero>
   <h1>Unlock the knowledge within<br>your personal vault.</h1>
   <p class=sub>You saved thousands of posts you'll never scroll back to. Import them, let AI
-  organize them into <b>your</b> topics, then search by meaning — or just ask a question and get
+  organize them into <b>your</b> topics, then search by meaning, or just ask a question and get
   an answer cited from your own bookmarks.</p>
   <a class=cta href="/login">Start free</a>
   <div class=freeline>Your 100 most recent bookmarks + 5 questions a day, free. No card needed.</div>
-  <div class=freeline style="margin-top:.35rem">🔒 <b>Private by design</b> — your library is
+  <div class=freeline style="margin-top:.35rem">🔒 <b>Private by design</b>: your library is
   visible only to you. Official X sign-in; we can read your bookmarks, never post or touch
   anything else.</div>
 </div>
@@ -96,7 +96,7 @@ def landing_page() -> HTMLResponse:
     <div class=kicker>Ask</div>
     <h2>Ask your bookmarks anything</h2>
     <p>"What did I save about prompt engineering?" A real answer, synthesized from your saved
-    posts — every claim cited back to the exact bookmark, side by side.</p>
+    posts, with every claim cited back to the exact bookmark, side by side.</p>
   </div>
   <div class=askdemo>
     <div class=q>What did I save about running local AI models?</div>
@@ -111,7 +111,7 @@ def landing_page() -> HTMLResponse:
   <div>
     <div class=kicker>Organize</div>
     <h2>Topics derived from <i>your</i> corpus</h2>
-    <p>No canned folders. The AI reads what you actually save and proposes your taxonomy —
+    <p>No canned folders. The AI reads what you actually save and proposes your taxonomy,
     then color-codes every bookmark so the feed finally makes sense. Rename, merge, or re-derive
     anytime.</p>
   </div>
@@ -122,7 +122,7 @@ def landing_page() -> HTMLResponse:
   <h2 class=center>How it works</h2>
   <div class=steps>
     <div class=step><span class=n>1</span><b>Connect X</b>One tap through X's official
-    sign-in. No password, no cookies — revoke anytime from your X settings.</div>
+    sign-in. No password, no cookies. Revoke anytime from your X settings.</div>
     <div class=step><span class=n>2</span><b>AI organizes</b>Your bookmarks are imported,
     understood, and sorted into your own topics in minutes.</div>
     <div class=step><span class=n>3</span><b>Search or ask</b>Find posts by meaning or exact
@@ -143,10 +143,10 @@ def landing_page() -> HTMLResponse:
       <ul><li>Your 100 most recent bookmarks</li><li>5 questions every day</li>
       <li>Full search &amp; browsing</li></ul></div>
     <div class="price hot"><div class=amt>1¢</div><div class=per>per bookmark, one-time</div>
-      <ul><li>Unlock your <b>entire</b> history</li><li>Pick how much to import — from $3</li>
-      <li>Only pay for what you have — the rest refunds automatically</li></ul></div>
+      <ul><li>Unlock your <b>entire</b> history</li><li>Pick how much to import, from $3</li>
+      <li>Only pay for what you have. The rest refunds automatically</li></ul></div>
     <div class=price><div class=amt>5¢</div><div class=per>per question</div>
-      <ul><li>No subscription — pay only for what you ask</li><li>$1 ≈ 20 questions</li>
+      <ul><li>No subscription. Pay only for what you ask</li><li>$1 ≈ 20 questions</li>
       <li>Bigger packs get up to 30% bonus questions</li></ul></div>
   </div>
   <div style="text-align:center;margin-top:1.8rem"><a class=cta href="/login">Start free</a></div>

@@ -76,7 +76,15 @@ class FakeAI:
     def assign_categories_batch(self, posts, taxonomy):
         return [self.assign_categories(p["text"], taxonomy) for p in posts]
 
-    def answer(self, question, retrieved):
+    def rewrite_query(self, question, history):
+        # Observable rewrite: fold the last user turn in, so tests can prove the follow-up
+        # was contextualized before retrieval.
+        prior = [t["content"] for t in history if t["role"] == "user"]
+        self.last_rewrite = f"{prior[-1]} {question}" if prior else question
+        return self.last_rewrite
+
+    def answer(self, question, retrieved, history=None):
+        self.last_history = list(history or [])  # recorded for multi-turn assertions
         ids = [r["id"] for r in retrieved]
         # Deliberately include a non-retrieved id to prove citation filtering.
         return {"answer": "Synthesized answer.", "citations": ids[:1] + ["999_absent"]}

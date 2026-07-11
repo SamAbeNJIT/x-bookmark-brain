@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from . import auth, authui, categorize, credits, jobs, landing, mail, storage, xapi, xauth
+from .ask import trim_history
 from .config import Config
 from .deps import get_ai, get_db, resolve_tenant
 from .log import logger
@@ -254,15 +255,28 @@ def _ai_error(what: str) -> str:
     )
 
 
-def _ask_form(question: str, autofocus: bool = True) -> str:
+def _ask_form(question: str, autofocus: bool = True, history: list | None = None) -> str:
+    """The ask box. The conversation thread travels in the hidden `history` field — the
+    server stays stateless; each POST carries the turns so far (bounded in ask.trim_history)."""
     af = " autofocus" if autofocus else ""
+    in_thread = bool(history)
+    placeholder = "Ask a follow-up…" if in_thread else "Ask a question about your bookmarks…"
+    hist_field = (
+        f'<input type=hidden name=history value="{esc(json.dumps(history))}">' if history else ""
+    )
+    new_convo = (
+        '<a href="/ui/ask" class=muted style="font-size:.82rem">↺ new conversation</a>'
+        if in_thread else ""
+    )
     return (
         '<form method=post action="/ui/ask" id="askform">'
-        f'<textarea name=question rows=3 '
-        f'placeholder="Ask a question about your bookmarks…"{af}>{esc(question)}</textarea>'
+        + hist_field
+        + f'<textarea name=question rows=3 placeholder="{placeholder}"{af}>'
+        f"{esc(question) if not in_thread else ''}</textarea>"
         '<div class=row style="margin-top:.55rem">'
-        '<button id="askbtn">Ask</button>'
+        f'<button id="askbtn">{"Send" if in_thread else "Ask"}</button>'
         '<span class=muted style="font-size:.82rem">⌘/Ctrl + Enter to send</span>'
+        + new_convo +
         '<span id="thinking" class="thinking" hidden>'
         '<span class="spinner"></span> Thinking… retrieving posts &amp; writing an answer</span>'
         "</div></form>"
@@ -276,18 +290,39 @@ def _ask_form(question: str, autofocus: bool = True) -> str:
     )
 
 
+def _thread_html(history: list[dict[str, str]]) -> str:
+    """Render prior turns as a compact thread above the latest answer."""
+    if not history:
+        return ""
+    bubbles = []
+    for t in history:
+        if t["role"] == "user":
+            bubbles.append(f'<div class="answer" style="background:transparent;border:none;'
+                           f'padding:.2rem 0;font-weight:600">{esc(t["content"])}</div>')
+        else:
+            bubbles.append(f'<div class="answer">{md_lite(t["content"])}</div>')
+    return '<div class="thread">' + "".join(bubbles) + "</div>"
+
+
 @ui_router.get("/ui/ask")
 def ui_ask(question: str = "", con=Depends(get_db), ai=Depends(get_ai)):
     return page("Ask", _ask_form(question))
 
 
 @ui_router.post("/ui/ask")
-def ui_ask_post(question: str = Form(...), con=Depends(get_db), ai=Depends(get_ai)):
-    form = _ask_form(question, autofocus=False)
+def ui_ask_post(question: str = Form(...), history: str = Form(""),
+                con=Depends(get_db), ai=Depends(get_ai)):
+    # The thread rides in a hidden form field (client-held state, server stays stateless);
+    # trim_history both validates the client-editable JSON and bounds what we send the model.
+    try:
+        turns = trim_history(json.loads(history)) if history else []
+    except (json.JSONDecodeError, TypeError):
+        turns = []
+    form = _ask_form(question, autofocus=False, history=turns or None)
     cfg = Config.from_env()
     try:
         result = credits.ask_charged(con, ai, question, 30, cfg.ask_price_usd,
-                                     cfg.free_asks_per_day)
+                                     cfg.free_asks_per_day, history=turns)
     except credits.OutOfCredits:
         msg = (f'<div class="answer">You\'ve used today\'s {cfg.free_asks_per_day} free questions '
                f'and your credit balance is empty. <a href="/ui/billing">Top up</a> '
@@ -298,6 +333,10 @@ def ui_ask_post(question: str = Form(...), con=Depends(get_db), ai=Depends(get_a
         return page("Ask", form + _ai_error("Ask"))
     cited = set(result["citations"])
     retrieved = result["retrieved"]
+    # Next form carries the thread including this exchange (trim_history caps growth).
+    new_turns = turns + [{"role": "user", "content": question},
+                         {"role": "assistant", "content": result.get("answer") or ""}]
+    form = _ask_form("", autofocus=False, history=trim_history(new_turns))
 
     def _card(p):
         html = post_card(p)
@@ -311,12 +350,16 @@ def ui_ask_post(question: str = Form(...), con=Depends(get_db), ai=Depends(get_a
         return html
 
     cards = "".join(_card(p) for p in retrieved)
+    # Prior turns render compactly above; the latest question + answer are the main event.
+    thread = _thread_html(turns)
+    latest_q = (f'<div class="answer" style="background:transparent;border:none;'
+                f'padding:.2rem 0;font-weight:600">{esc(question)}</div>')
     answer = f'<div class="answer">{md_lite(result.get("answer"))}</div>'
     if retrieved:
         # Two-pane: the answer sticks on the left while the source bookmarks scroll on the right.
         body = (
             '<div class="ask-cols">'
-            f'<div class="ask-left">{answer}</div>'
+            f'<div class="ask-left">{thread}{latest_q}{answer}</div>'
             '<div class="ask-right">'
             f'<h3>{len(retrieved)} related bookmarks '
             f'<span class=muted>({len(cited)} cited in the answer)</span></h3>'
@@ -324,7 +367,7 @@ def ui_ask_post(question: str = Form(...), con=Depends(get_db), ai=Depends(get_a
             "</div></div>"
         )
     else:
-        body = answer
+        body = thread + latest_q + answer
     return page("Ask", form + body, wide=bool(retrieved))
 
 

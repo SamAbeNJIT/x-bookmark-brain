@@ -132,6 +132,9 @@ class RenameIn(BaseModel):
 class AskIn(BaseModel):
     question: str
     k: int = 30
+    # Prior conversation, client-held: [{role: user|assistant, content}, ...]. The server
+    # stays stateless; ask.trim_history validates and bounds whatever arrives here.
+    history: list[dict] = []
 
 
 def create_app() -> FastAPI:
@@ -396,7 +399,7 @@ def create_app() -> FastAPI:
         cfg = Config.from_env()
         try:
             return credits.ask_charged(con, ai, body.question, body.k, cfg.ask_price_usd,
-                                       cfg.free_asks_per_day)
+                                       cfg.free_asks_per_day, history=body.history)
         except credits.OutOfCredits:
             return {"question": body.question, "citations": [], "retrieved": [],
                     "answer": f"You've used today's {cfg.free_asks_per_day} free questions and "

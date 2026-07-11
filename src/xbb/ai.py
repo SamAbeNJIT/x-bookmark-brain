@@ -98,8 +98,18 @@ class AIClient(Protocol):
         """Multi-label several posts in one call. Returns labels aligned to `posts` order."""
         ...
 
-    def answer(self, question: str, retrieved: list[dict[str, Any]]) -> dict[str, Any]:
-        """Synthesize an answer with citations from retrieved bookmarks."""
+    def rewrite_query(self, question: str, history: list[dict[str, str]]) -> str:
+        """Rewrite a follow-up question into a standalone search query using the conversation."""
+        ...
+
+    def answer(
+        self,
+        question: str,
+        retrieved: list[dict[str, Any]],
+        history: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
+        """Synthesize an answer with citations from retrieved bookmarks; `history` is the
+        prior conversation as [{role: user|assistant, content}, ...]."""
         ...
 
 
@@ -170,14 +180,23 @@ class BedrockAIClient:
         # Amazon Titan Text Embeddings: one inputText per call (no batch endpoint).
         return [self._invoke(self.embedding_model, {"inputText": t})["embedding"] for t in texts]
 
-    def _invoke_claude(self, model: str, system: str, user: str, max_tokens: int = 2048) -> str:  # pragma: no cover
+    def _invoke_claude(
+        self,
+        model: str,
+        system: str,
+        user: str,
+        max_tokens: int = 2048,
+        history: list[dict[str, str]] | None = None,
+    ) -> str:  # pragma: no cover
         payload = self._invoke(
             model,
             {
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": max_tokens,
                 "system": system,
-                "messages": [{"role": "user", "content": user}],
+                "messages": [
+                    {"role": t["role"], "content": t["content"]} for t in (history or [])
+                ] + [{"role": "user", "content": user}],
             },
         )
         return payload["content"][0]["text"]
@@ -251,13 +270,41 @@ class BedrockAIClient:
             out.append(_norm_labels(v))
         return out
 
-    def answer(self, question: str, retrieved: list[dict[str, Any]]) -> dict[str, Any]:  # pragma: no cover
+    def rewrite_query(self, question: str, history: list[dict[str, str]]) -> str:  # pragma: no cover
+        """Make a follow-up retrievable: "which of those are about evals?" only searches well
+        once the conversation's referent is folded in. Cheap labeling-model call; on any
+        failure fall back to the raw question (an ask must never die on the rewrite)."""
+        if not history:
+            return question
         system = (
-            "Answer the question using ONLY the provided saved posts. Cite the posts you "
-            "use by their id. Reply with ONLY JSON: {\"answer\": str, \"citations\": [post_id]}."
+            "Rewrite the user's latest question as a short standalone search query, resolving "
+            "any references to the earlier conversation. Reply with ONLY the query text — no "
+            "quotes, no explanation."
+        )
+        convo = "\n".join(f"{t['role']}: {t['content']}" for t in history)
+        try:
+            rewritten = self._invoke_claude(
+                self.labeling_model, system,
+                f"Conversation so far:\n{convo}\n\nLatest question: {question}",
+                max_tokens=200,
+            ).strip()
+        except Exception:
+            return question
+        return rewritten or question
+
+    def answer(
+        self,
+        question: str,
+        retrieved: list[dict[str, Any]],
+        history: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:  # pragma: no cover
+        system = (
+            "Answer the question using ONLY the provided saved posts, considering the prior "
+            "conversation for context. Cite the posts you use by their id. Reply with ONLY "
+            "JSON: {\"answer\": str, \"citations\": [post_id]}."
         )
         user = f"Question: {question}\n\nPosts:\n{json.dumps(retrieved)}"
-        raw = self._invoke_claude(self.reasoning_model, system, user)
+        raw = self._invoke_claude(self.reasoning_model, system, user, history=history)
         try:
             result = _extract_json(raw)
         except ValueError:
