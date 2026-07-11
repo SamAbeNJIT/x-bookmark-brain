@@ -24,7 +24,7 @@ CREDIT_PACK_BONUS = (          # (minimum amount, bonus fraction) — checked to
 SUB_PRICE_USD = 3.99
 SUB_MONTHLY_CREDITS_USD = 7.50
 
-IMPORT_SLIDER_MIN = 500        # keeps every charge comfortably above Stripe's fee floor
+IMPORT_SLIDER_MIN = 400        # (400-100 free) x 1¢ = $3 minimum charge (owner call, 2026-07-10)
 IMPORT_SLIDER_MAX = 20_000
 IMPORT_SLIDER_STEP = 100
 
