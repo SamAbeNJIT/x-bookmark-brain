@@ -68,8 +68,23 @@ def landing_page() -> HTMLResponse:
 <meta name=viewport content='width=device-width, initial-scale=1'>
 <title>x-bookmarks.ai: unlock the knowledge within your personal vault</title>
 <meta name=description content="Import your X bookmarks, let AI organize them into your own topics, then search by meaning or just ask, with answers cited from your saved posts.">
+<link rel="canonical" href="https://x-bookmarks.ai/">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://x-bookmarks.ai/">
+<meta property="og:site_name" content="x-bookmarks.ai">
+<meta property="og:title" content="Search, organize, and ask your X bookmarks">
+<meta property="og:description" content="Import your X bookmarks, let AI organize them into your own topics, then search by meaning or ask questions with cited answers.">
+<meta property="og:image" content="https://x-bookmarks.ai/static/feed.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Search, organize, and ask your X bookmarks">
+<meta name="twitter:description" content="AI organizes your saved posts into your own topics. Search by meaning, ask questions, get cited answers.">
+<meta name="twitter:image" content="https://x-bookmarks.ai/static/feed.png">
 <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<script type="application/ld+json">{{"@context":"https://schema.org","@type":"SoftwareApplication",
+"name":"x-bookmarks.ai","applicationCategory":"UtilitiesApplication","operatingSystem":"Web",
+"url":"https://x-bookmarks.ai/","description":"AI search and organization for your X (Twitter) bookmarks: import your saved posts, get them sorted into your own topics, search by meaning, and ask questions with cited answers.",
+"offers":{{"@type":"Offer","price":"0","priceCurrency":"USD","description":"Free: 100 most recent bookmarks and 5 questions a day"}}}}</script>
 <style>{_CSS}</style></head><body>
 <div class=wrap>
 <nav><span class=brand>bookmark<span class=dot>.</span>brain</span>

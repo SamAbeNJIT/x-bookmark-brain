@@ -297,8 +297,11 @@ def _thread_html(history: list[dict[str, str]]) -> str:
     bubbles = []
     for t in history:
         if t["role"] == "user":
+            # Air above each question separates it from the preceding answer card; it stays
+            # snug to its own answer below (owner: questions felt squished between cards).
             bubbles.append(f'<div class="answer" style="background:transparent;border:none;'
-                           f'padding:.2rem 0;font-weight:600">{esc(t["content"])}</div>')
+                           f'box-shadow:none;margin:1.4rem 0 .4rem;padding:0;'
+                           f'font-weight:600">{esc(t["content"])}</div>')
         else:
             bubbles.append(f'<div class="answer">{md_lite(t["content"])}</div>')
     return '<div class="thread">' + "".join(bubbles) + "</div>"
@@ -353,7 +356,8 @@ def ui_ask_post(question: str = Form(...), history: str = Form(""),
     # Prior turns render compactly above; the latest question + answer are the main event.
     thread = _thread_html(turns)
     latest_q = (f'<div class="answer" style="background:transparent;border:none;'
-                f'padding:.2rem 0;font-weight:600">{esc(question)}</div>')
+                f'box-shadow:none;margin:1.4rem 0 .4rem;padding:0;'
+                f'font-weight:600">{esc(question)}</div>')
     answer = f'<div class="answer">{md_lite(result.get("answer"))}</div>'
     if retrieved:
         # Two-pane: the answer sticks on the left while the source bookmarks scroll on the right.

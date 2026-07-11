@@ -153,6 +153,30 @@ def create_app() -> FastAPI:
     def privacy_route():
         return legal.privacy_page()
 
+    # --- SEO plumbing (public): the crawl map + crawler rules ---
+    _BASE = "https://x-bookmarks.ai"
+
+    @app.get("/sitemap.xml")
+    def sitemap_route():
+        urls = "".join(f"<url><loc>{_BASE}{p}</loc></url>"
+                       for p in ("/", "/terms", "/privacy"))
+        return Response(
+            content='<?xml version="1.0" encoding="UTF-8"?>'
+                    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+                    f"{urls}</urlset>",
+            media_type="application/xml",
+        )
+
+    @app.get("/robots.txt")
+    def robots_route():
+        # Public marketing surface is crawlable; the signed-in app is not (it 303s to /login
+        # anyway, but Disallow keeps crawlers from wasting the budget and logging noise).
+        return Response(
+            content=f"User-agent: *\nDisallow: /ui/\nDisallow: /billing/\n"
+                    f"Sitemap: {_BASE}/sitemap.xml\n",
+            media_type="text/plain",
+        )
+
     # --- auth (magic-link sign in) ---
     @app.get("/login")
     def login_page_route():
@@ -417,7 +441,8 @@ def create_app() -> FastAPI:
 
     # When REQUIRE_AUTH is on (hosted/multi-user), gate everything behind a valid session except
     # the public surface (login, the OAuth/auth endpoints, the Stripe webhook, health).
-    _PUBLIC_EXACT = {"/health", "/login", "/terms", "/privacy", "/"}  # "/" shows the landing page
+    _PUBLIC_EXACT = {"/health", "/login", "/terms", "/privacy", "/",  # "/" shows the landing page
+                     "/sitemap.xml", "/robots.txt"}
     _PUBLIC_PREFIX = ("/auth/", "/oauth/", "/static/")
 
     @app.middleware("http")

@@ -48,6 +48,27 @@ def test_static_screenshots_served(monkeypatch, seeded_db, fake_ai):
     assert c.get("/static/feed.png").status_code == 200  # auth-exempt + mounted
 
 
+def test_seo_plumbing_is_public_and_wellformed(monkeypatch, seeded_db, fake_ai):
+    c = _client(monkeypatch, seeded_db, fake_ai)  # REQUIRE_AUTH on: these must stay public
+    r = c.get("/sitemap.xml", follow_redirects=False)
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/xml")
+    for p in ("https://x-bookmarks.ai/", "/terms", "/privacy"):
+        assert p in r.text
+    r = c.get("/robots.txt", follow_redirects=False)
+    assert r.status_code == 200
+    assert "Sitemap: https://x-bookmarks.ai/sitemap.xml" in r.text
+    assert "Disallow: /ui/" in r.text
+
+
+def test_landing_has_seo_head_tags(monkeypatch, seeded_db, fake_ai):
+    c = _client(monkeypatch, seeded_db, fake_ai)
+    html = c.get("/").text
+    assert '<link rel="canonical" href="https://x-bookmarks.ai/">' in html
+    assert 'property="og:title"' in html and 'name="twitter:card"' in html
+    assert 'application/ld+json' in html and '"@type":"SoftwareApplication"' in html
+
+
 def test_feedback_form_submits(client):
     r = client.get("/ui/feedback")
     assert r.status_code == 200 and 'action="/ui/feedback"' in r.text
