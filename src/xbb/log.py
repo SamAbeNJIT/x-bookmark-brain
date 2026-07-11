@@ -14,11 +14,14 @@ from __future__ import annotations
 import logging
 import sys
 
-logging.basicConfig(
-    stream=sys.stdout,
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s xbb %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
-)
-
+# Deliberately NOT logging.basicConfig(): under uvicorn the root logger is already configured,
+# so basicConfig silently no-ops and INFO lines get dropped by the WARNING-level root — which
+# made every xbb.* event invisible in CloudWatch for a day. Attach our own handler instead.
 logger = logging.getLogger("xbb")
+if not logger.handlers:
+    _h = logging.StreamHandler(sys.stdout)
+    _h.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s xbb %(message)s", datefmt="%Y-%m-%dT%H:%M:%S"))
+    logger.addHandler(_h)
+logger.setLevel(logging.INFO)
+logger.propagate = False  # don't double-print through uvicorn's root handler
