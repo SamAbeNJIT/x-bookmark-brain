@@ -301,8 +301,10 @@ class BedrockAIClient:
         system = (
             "Answer the question using ONLY the provided saved posts, considering the prior "
             "conversation for context. Match your length to the question: answer as fully as "
-            "it deserves, but don't pad. Cite the posts you use by their id. Reply with ONLY "
-            "JSON: {\"answer\": str, \"citations\": [post_id]}."
+            "it deserves, but don't pad. List the ids of the posts you drew on in the "
+            "citations array — NEVER write raw post ids inside the answer text; refer to "
+            "sources naturally (\"one thread argues…\", \"a post by @handle…\"). Reply with "
+            "ONLY JSON: {\"answer\": str, \"citations\": [post_id]}."
         )
         # Send only what the model needs (id/handle/text) — the full dicts (urls, avatars,
         # media json) roughly double the input tokens for zero answer quality.

@@ -354,18 +354,30 @@ def ui_ask_post(request: Request, question: str = Form(...), history: str = Form
         return page("Ask", form + _ai_error("Ask"))
     cited = set(result["citations"])
     retrieved = result["retrieved"]
+    # Raw post ids leaking into the prose read as garbage numbers (owner report). The prompt
+    # now forbids them, but models regress: swap any retrieved id in the text for a numbered
+    # [n] marker and number the matching card's badge so the reference points somewhere.
+    refno = {pid: i + 1 for i, pid in enumerate(result["citations"])}
+    ans_text = result.get("answer") or ""
+    for p in retrieved:
+        pid = str(p.get("id") or "")
+        if pid and pid in ans_text:
+            n = refno.setdefault(pid, len(refno) + 1)
+            ans_text = ans_text.replace(f"({pid})", f"[{n}]").replace(pid, f"[{n}]")
     # Next form carries the thread including this exchange (trim_history caps growth).
     new_turns = turns + [{"role": "user", "content": question},
-                         {"role": "assistant", "content": result.get("answer") or ""}]
+                         {"role": "assistant", "content": ans_text}]
     form = _ask_form("", autofocus=False, history=trim_history(new_turns))
 
     def _card(p):
         html = post_card(p)
         if p["id"] in cited:  # flag the ones the answer actually used
+            n = refno.get(p["id"])
+            label = f"★ cited [{n}]" if n and f"[{n}]" in ans_text else "★ cited"
             html = html.replace(
                 '<div class="head">',
                 '<div class="head"><span class="badge" '
-                'style="background:var(--accent-soft);color:var(--accent-ink)">★ cited</span>',
+                f'style="background:var(--accent-soft);color:var(--accent-ink)">{label}</span>',
                 1,
             )
         return html
@@ -374,7 +386,7 @@ def ui_ask_post(request: Request, question: str = Form(...), history: str = Form
     # Prior turns render compactly above; the latest question + answer are the main event.
     thread = _thread_html(turns)
     latest_q = _question_card(question)
-    answer = f'<div class="answer">{md_lite(result.get("answer"))}</div>'
+    answer = f'<div class="answer">{md_lite(ans_text)}</div>'
     if retrieved:
         # Two-pane: the answer sticks on the left while the source bookmarks scroll on the right.
         body = (

@@ -28,6 +28,17 @@ def test_ask_ui_returns_answer(client):
     assert "Synthesized answer" in r.text
 
 
+def test_ask_ui_rewrites_raw_post_ids_to_numbered_refs(client):
+    """FakeAI leaks the cited post id into the prose (as real models do); the UI must render
+    a [1] marker instead of the raw id, and number the cited card's badge to match."""
+    client.post("/index")
+    r = client.post("/ui/ask", data={"question": "rag evaluation"})
+    assert r.status_code == 200
+    assert "(1001)" not in r.text.replace("[1]", "")  # raw id gone from the prose
+    assert "[1]" in r.text                            # numbered marker in its place
+    assert "★ cited [1]" in r.text                    # matching card badge
+
+
 def test_refresh_ui_renders(client):
     r = client.get("/ui/refresh")  # GET is side-effect free (POST would trigger a sync)
     assert r.status_code == 200

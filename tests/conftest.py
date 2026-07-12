@@ -86,8 +86,10 @@ class FakeAI:
     def answer(self, question, retrieved, history=None):
         self.last_history = list(history or [])  # recorded for multi-turn assertions
         ids = [r["id"] for r in retrieved]
-        # Deliberately include a non-retrieved id to prove citation filtering.
-        return {"answer": "Synthesized answer.", "citations": ids[:1] + ["999_absent"]}
+        # Leak the cited id into the prose (models do this) to prove the UI's [n] rewrite,
+        # and include a non-retrieved id to prove citation filtering.
+        leak = f" One post ({ids[0]}) covers this." if ids else ""
+        return {"answer": "Synthesized answer." + leak, "citations": ids[:1] + ["999_absent"]}
 
 
 class FakeClient:
