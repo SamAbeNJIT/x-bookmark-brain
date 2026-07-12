@@ -24,11 +24,14 @@ nav a.signin { margin-left:auto; text-decoration:none; color:var(--ink); font-we
 .hero { text-align:center; padding:4.2rem 0 2.6rem; }
 .hero h1 { font-size:clamp(2rem,5vw,3.3rem); letter-spacing:-.03em; line-height:1.12; }
 .hero p.sub { max-width:640px; margin:1.1rem auto 0; font-size:1.13rem; color:var(--muted); }
-.cta { display:inline-block; margin-top:1.6rem; background:var(--accent); color:#fff; font-weight:700;
-       font-size:1.05rem; padding:.9rem 1.8rem; border-radius:12px; text-decoration:none;
-       box-shadow:0 6px 18px rgba(91,108,240,.35); }
-.cta:hover { background:var(--accent-ink); }
+.cta { display:inline-block; margin-top:1.6rem; background:#0f0f14; color:#fff; font-weight:700;
+       font-size:1.1rem; padding:1rem 2rem; border-radius:12px; text-decoration:none;
+       box-shadow:0 6px 18px rgba(15,15,20,.3); }
+.cta:hover { background:#26262e; }
+.cta .x { font-weight:800; margin-right:.45rem; }
 .freeline { margin-top:.8rem; color:var(--muted); font-size:.92rem; }
+.alt-signin { display:block; margin-top:.55rem; color:var(--muted); font-size:.85rem; }
+.alt-signin a { color:var(--muted); }
 .shot { display:block; width:100%; border-radius:14px; border:1px solid var(--line); box-shadow:var(--shadow); }
 .fade { position:relative; overflow:hidden; border-radius:14px; }
 .fade::after { content:''; position:absolute; left:0; right:0; bottom:0; height:70px;
@@ -66,18 +69,18 @@ footer a { color:inherit; }
 def landing_page() -> HTMLResponse:
     html = f"""<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content='width=device-width, initial-scale=1'>
-<title>x-bookmarks.ai: unlock the knowledge within your personal vault</title>
-<meta name=description content="Import your X bookmarks, let AI organize them into your own topics, then search by meaning or just ask, with answers cited from your saved posts.">
+<title>x-bookmarks.ai: find any X bookmark in seconds</title>
+<meta name=description content="You saved thousands of X bookmarks you can never find again. Turn them into searchable knowledge: find any saved post in seconds, or ask and get answers cited from your own bookmarks.">
 <link rel="canonical" href="https://x-bookmarks.ai/">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://x-bookmarks.ai/">
 <meta property="og:site_name" content="x-bookmarks.ai">
-<meta property="og:title" content="Search, organize, and ask your X bookmarks">
-<meta property="og:description" content="Import your X bookmarks, let AI organize them into your own topics, then search by meaning or ask questions with cited answers.">
+<meta property="og:title" content="Find any X bookmark in seconds">
+<meta property="og:description" content="Turn your X bookmarks into searchable knowledge. Sign in with X, your last 100 organize themselves, free.">
 <meta property="og:image" content="https://x-bookmarks.ai/static/feed.png">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Search, organize, and ask your X bookmarks">
-<meta name="twitter:description" content="AI organizes your saved posts into your own topics. Search by meaning, ask questions, get cited answers.">
+<meta name="twitter:title" content="Find any X bookmark in seconds">
+<meta name="twitter:description" content="Turn your X bookmarks into searchable knowledge. Sign in with X, your last 100 organize themselves, free.">
 <meta name="twitter:image" content="https://x-bookmarks.ai/static/feed.png">
 <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
@@ -91,15 +94,15 @@ def landing_page() -> HTMLResponse:
 <a class=signin href="/login">Sign in</a></nav>
 
 <div class=hero>
-  <h1>Unlock the knowledge within<br>your personal vault.</h1>
-  <p class=sub>You saved thousands of posts you'll never scroll back to. Import them, let AI
-  organize them into <b>your</b> topics, then search by meaning, or just ask a question and get
-  an answer cited from your own bookmarks.</p>
-  <a class=cta href="/login">Start free</a>
-  <div class=freeline>Your 100 most recent bookmarks + 5 questions a day, free. No card needed.</div>
-  <div class=freeline style="margin-top:.35rem">🔒 <b>Private by design</b>: your library is
-  visible only to you. Official X sign-in; we can read your bookmarks, never post or touch
-  anything else.</div>
+  <h1>You saved 1,000 bookmarks.<br>You can't find one of them.</h1>
+  <p class=sub>Every thread you meant to come back to is buried in an endless, unsearchable list.
+  x-bookmarks.ai turns your X bookmarks into searchable knowledge: find any saved post in
+  seconds, or ask a question and get an answer built from what <b>you</b> saved.</p>
+  <a class=cta href="/oauth/signin"><span class=x>𝕏</span>Sign in with X, free</a>
+  <div class=freeline><b>Free forever:</b> your last 100 bookmarks organized + 5 AI questions a
+  day. No card, nothing to set up. You're searching your bookmarks about a minute from now.</div>
+  <div class=freeline style="margin-top:.35rem">🔒 Read-only bookmark access via X's official
+  sign-in. We never post, follow, or touch anything else, and only you can see your library.</div>
 </div>
 
 <section>
@@ -108,63 +111,67 @@ def landing_page() -> HTMLResponse:
 
 <section class=feature>
   <div>
-    <div class=kicker>Ask</div>
-    <h2>Ask your bookmarks anything</h2>
-    <p>"What did I save about prompt engineering?" A real answer, synthesized from your saved
-    posts, with every claim cited back to the exact bookmark, side by side.</p>
+    <div class=kicker>Find it</div>
+    <h2>Find any bookmarked tweet in seconds</h2>
+    <p>Search by what you remember, not exact words: "that thread about pricing psychology"
+    works. Or ask a question and get a real answer, every claim cited back to the exact
+    bookmark it came from.</p>
   </div>
   <div class=askdemo>
-    <div class=q>What did I save about running local AI models?</div>
-    <div class=a>You bookmarked several posts on this: falling hardware costs for large local
-    models, a Mac&nbsp;Mini server farm build, and a thread arguing local inference wins on
-    privacy…</div>
-    <span class=cite>★ cited · 7 of your bookmarks</span>
+    <div class=q>What did I save about growing an audience on X?</div>
+    <div class=a>Three threads stand out: a 30-day writing system you bookmarked in March, a
+    breakdown of hook formulas with 12 examples, and the post arguing consistency beats
+    virality, plus 4 more on profile design and reply strategy…</div>
+    <span class=cite>★ every claim cited to one of your bookmarks</span>
   </div>
 </section>
 
 <section class=feature>
   <div>
-    <div class=kicker>Organize</div>
-    <h2>Topics derived from <i>your</i> corpus</h2>
-    <p>No canned folders. The AI reads what you actually save and proposes your taxonomy,
-    then color-codes every bookmark so the feed finally makes sense. Rename, merge, or re-derive
-    anytime.</p>
+    <div class=kicker>Organized for you</div>
+    <h2>Never lose another thread</h2>
+    <p>AI sorts every bookmark into topics drawn from what <i>you</i> actually save, color-coded
+    and browsable. No folders to maintain, nothing to file. Saving on X stays one tap; finding
+    finally works.</p>
   </div>
   <div><img class=shot src="/static/categories.png" alt="AI-derived categories with counts"></div>
 </section>
 
 <section>
-  <h2 class=center>How it works</h2>
+  <h2 class=center>From sign-in to searchable in about a minute</h2>
   <div class=steps>
-    <div class=step><span class=n>1</span><b>Connect X</b>One tap through X's official
-    sign-in. No password, no cookies. Revoke anytime from your X settings.</div>
-    <div class=step><span class=n>2</span><b>AI organizes</b>Your bookmarks are imported,
-    understood, and sorted into your own topics in minutes.</div>
-    <div class=step><span class=n>3</span><b>Search or ask</b>Find posts by meaning or exact
-    keywords, or ask questions and get cited answers.</div>
+    <div class=step><span class=n>1</span><b>Sign in with X</b>One tap, official X sign-in.
+    Read-only bookmark access. Revoke anytime from your X settings.</div>
+    <div class=step><span class=n>2</span><b>Your bookmarks organize themselves</b>Your last
+    100 sync automatically and land in your own topics, free, no card.</div>
+    <div class=step><span class=n>3</span><b>Search, browse, ask</b>Find that post you half
+    remember, or ask questions and get cited answers.</div>
   </div>
 </section>
 
 <section>
   <div><img class=shot src="/static/stats.png" alt="17,004 bookmarks organized into 22 categories"></div>
   <p style="text-align:center;color:var(--muted);font-size:.9rem;margin-top:.6rem">
-  The founder's own library: 17,004 bookmarks, organized.</p>
+  The founder's own library: 17,004 bookmarks, every one findable.</p>
 </section>
 
 <section>
-  <h2 class=center>Simple pricing</h2>
+  <h2 class=center>Free to try. Pay only if you want more.</h2>
   <div class=pricing>
-    <div class=price><div class=amt>Free</div><div class=per>forever</div>
-      <ul><li>Your 100 most recent bookmarks</li><li>5 questions every day</li>
+    <div class="price hot"><div class=amt>Free</div><div class=per>forever, no card</div>
+      <ul><li>Your 100 most recent bookmarks, organized</li><li>5 AI questions every day</li>
       <li>Full search &amp; browsing</li></ul></div>
-    <div class="price hot"><div class=amt>1¢</div><div class=per>per bookmark, one-time</div>
-      <ul><li>Unlock your <b>entire</b> history</li><li>Pick how much to import, from $3</li>
-      <li>Only pay for what you have. The rest refunds automatically</li></ul></div>
+    <div class=price><div class=amt>1¢</div><div class=per>per bookmark, one-time</div>
+      <ul><li>Unlock your <b>entire</b> history, from $3</li>
+      <li>Only pay for what you have; unused capacity refunds to your card automatically</li></ul></div>
     <div class=price><div class=amt>5¢</div><div class=per>per question</div>
-      <ul><li>No subscription. Pay only for what you ask</li><li>$1 ≈ 20 questions</li>
+      <ul><li>No subscription. $1 ≈ 20 questions</li>
       <li>Bigger packs get up to 30% bonus questions</li></ul></div>
   </div>
-  <div style="text-align:center;margin-top:1.8rem"><a class=cta href="/login">Start free</a></div>
+  <div style="text-align:center;margin-top:1.8rem">
+    <a class=cta href="/oauth/signin"><span class=x>𝕏</span>Sign in with X, free</a>
+    <span class=alt-signin>prefer email? <a href="/login">sign in with a magic link</a></span>
+  </div>
 </section>
 
 <footer>
