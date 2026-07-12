@@ -529,6 +529,34 @@ def is_ingestion_paid(con: psycopg.Connection) -> bool:
     return bool(row and row[0])
 
 
+def is_capped_free(con: psycopg.Connection, free_limit: int) -> bool:
+    """Is this tenant a free account sitting at the free-import cap? The single predicate
+    behind every "complete your library" upsell surface — any purchase flips it false
+    everywhere at once. NOTE: a user whose entire timeline is exactly <= free_limit still
+    counts (X has no bookmark-count API, so "more pages exist" is unknowable without a paid
+    fetch); sub-limit users are provably uncapped and see nothing."""
+    if is_ingestion_paid(con) or import_limit(con) > 0:
+        return False
+    n = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+    return n >= free_limit
+
+
+def increment_total_asks(con: psycopg.Connection) -> int:
+    """Bump the tenant's lifetime answered-question counter; returns the new total.
+    Powers the "first successful answer" upsell trigger (existing tenants start at 0, so
+    their next answer counts as #1 — deliberate: the current cohort gets one impression)."""
+    con.execute(
+        "INSERT INTO sync_state (key, value) VALUES ('asks_total', '0') "
+        "ON CONFLICT (tenant_id, key) DO NOTHING"
+    )
+    row = con.execute(
+        "UPDATE sync_state SET value = (value::int + 1)::text "
+        "WHERE key = 'asks_total' RETURNING value"
+    ).fetchone()
+    con.commit()
+    return int(row[0])
+
+
 def set_ingestion_paid(con: psycopg.Connection, account_id: str, paid: bool = True) -> None:
     con.execute("UPDATE accounts SET ingestion_paid = %s WHERE id = %s", (paid, account_id))
     con.commit()

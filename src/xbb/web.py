@@ -51,6 +51,12 @@ def _apply_billing_event(con, info: dict) -> None:
 def _apply_payment_event(con, event: dict) -> bool:
     """Handle a one-time payment (import entitlement, credit top-up, legacy ingestion).
     Returns True if it was a one-time payment we handled (caller skips the subscription path)."""
+    if event.get("type") == "checkout.session.expired":
+        # Funnel telemetry only (fires ~24h after the session was created and abandoned).
+        obj = event.get("data", {}).get("object", {})
+        logger.info("funnel.checkout_abandoned kind=%s tenant=%s",
+                    (obj.get("metadata") or {}).get("kind"), obj.get("client_reference_id"))
+        return True
     if event.get("type") != "checkout.session.completed":
         return False
     obj = event.get("data", {}).get("object", {})
@@ -60,6 +66,8 @@ def _apply_payment_event(con, event: dict) -> bool:
     meta = obj.get("metadata") or {}
     kind = meta.get("kind")
     paid = (obj.get("amount_total") or 0) / 100.0
+    logger.info("funnel.checkout_completed kind=%s amount_usd=%.2f tenant=%s",
+                kind, paid, account_id)
     buyer_email = obj.get("customer_email") or (obj.get("customer_details") or {}).get("email")
     buyer = buyer_email or account_id
     # Opportunistic email capture: X-sign-in accounts have no email until Stripe collects one.
@@ -231,15 +239,31 @@ def create_app() -> FastAPI:
         return (auth.verify_session_token(token, cfg.session_secret) if token else None) or cfg.tenant_id
 
     @app.get("/ui/billing")
-    def billing_page_route(request: Request, con=Depends(get_db)):
+    def billing_page_route(request: Request, src: str = "", con=Depends(get_db)):
         cfg = Config.from_env()
         bal = storage.credit_balance(con)
         cap = storage.effective_import_cap(con, cfg.free_bookmark_limit)
         free_left = max(cfg.free_asks_per_day - storage.free_asks_used_today(con), 0)
         asks = int(bal / cfg.ask_price_usd) if cfg.ask_price_usd else 0
-        body = (f'<div class="answer"><b>{free_left} free question(s) left today</b> '
-                f"(resets daily) · <b>credit balance: ${bal:.2f}</b> "
-                f"(~{asks} more at ${cfg.ask_price_usd:.2f} each).</div>")
+        body = ""
+        if src and cap is not None:
+            # Arrived from an upsell prompt: explain exactly what "complete your library"
+            # means before showing any controls (owner spec: no vague "upgrade" language).
+            body += (
+                '<div class="answer" style="border-left:4px solid var(--accent)">'
+                "<b>Complete your library</b><ul style='margin:.5rem 0 0 1.1rem'>"
+                f"<li>Your newest {cfg.free_bookmark_limit} bookmarks are already imported — "
+                "this unlocks the rest.</li>"
+                "<li>X doesn't reveal your exact total until the full library is scanned.</li>"
+                "<li>You authorize the amount below before any large fetch begins.</li>"
+                f"<li>{int(cfg.price_per_bookmark_usd * 100)}¢ per imported bookmark, "
+                f"${pricing.IMPORT_SLIDER_MIN * cfg.price_per_bookmark_usd:.0f} minimum.</li>"
+                "<li>You'll never be charged beyond the amount you authorize — unused "
+                "capacity refunds to your card automatically.</li></ul></div>"
+            )
+        body += (f'<div class="answer"><b>{free_left} free question(s) left today</b> '
+                 f"(resets daily) · <b>credit balance: ${bal:.2f}</b> "
+                 f"(~{asks} more at ${cfg.ask_price_usd:.2f} each).</div>")
 
         # --- import entitlement / slider ---
         if cap is None:
@@ -269,7 +293,7 @@ def create_app() -> FastAPI:
                     '<div class=row style="margin:.4rem 0 .6rem">'
                     '<span>up to <b id=imp_lbl>1,000</b> bookmarks</span>'
                     '<span style="margin-left:auto">$<b id=imp_price>9.00</b> one-time</span></div>'
-                    "<button>Import them</button></form>"
+                    "<button>Complete my library</button></form>"
                 )
 
         # --- credits: custom one-time + subscription ---
@@ -336,6 +360,9 @@ def create_app() -> FastAPI:
             url = billing.create_payment_session(
                 price_id=cfg.stripe_ingest_price_id,
                 metadata={"kind": "ingestion", "account_id": account_id}, **common)
+        amt = price if kind == "import" else (amt if kind == "credits" else 0)
+        logger.info("funnel.checkout_created kind=%s amount_usd=%.2f tenant=%s",
+                    kind, amt, account_id)
         return RedirectResponse(url, status_code=303)
 
     @app.get("/billing/success")

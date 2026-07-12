@@ -137,6 +137,9 @@ def _run(cfg: Config, tenant_id: str) -> None:
 
         _set(tenant_id, step="done", detail=f"up to date — {added} new bookmark(s) added")
         logger.info("sync.done tenant=%s added=%d", tenant_id, added)
+        if storage.is_capped_free(con, cfg.free_bookmark_limit):
+            total = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+            logger.info("funnel.cap_hit tenant=%s posts=%d", tenant_id, total)
     except Exception as e:  # surface any failure to the UI instead of dying silently
         logger.exception("sync.error tenant=%s: %s", tenant_id, e)  # full traceback -> CloudWatch
         _set(tenant_id, step="error", error=f"{type(e).__name__}: {e}")

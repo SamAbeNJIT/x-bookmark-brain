@@ -191,10 +191,27 @@ def ui_refresh(request: Request, con=Depends(get_db)):
         state = f'<div class="answer" style="border-left-color:#d64545">⚠️ {esc(s["error"])}</div>'
     elif s["step"] == "done":
         # The conversion moment: their library just got organized — hand them the next step.
+        # Cap-hit free users get honest partial-library framing (value first, price later —
+        # the first-answer card and banner carry the actual upsell).
+        if storage.is_capped_free(con, cfg.free_bookmark_limit):
+            logger.info("funnel.upsell_viewed surface=post_sync tenant=%s",
+                        resolve_tenant(request, cfg))
+            lead = (
+                f'<div class="answer">✅ Your newest {cfg.free_bookmark_limit} bookmarks '
+                "are ready.</div>"
+                '<p class=lead style="margin-top:1rem">You have more bookmarks waiting. '
+                "Ask your first question, then complete your library whenever "
+                "you're ready.</p>"
+            )
+        else:
+            lead = (
+                f'<div class="answer">✅ {esc(s["detail"])}</div>'
+                '<p class=lead style="margin-top:1rem">Your bookmarks are organized. '
+                "Now the fun part:</p>"
+            )
         state = (
-            f'<div class="answer">✅ {esc(s["detail"])}</div>'
-            '<p class=lead style="margin-top:1rem">Your bookmarks are organized. Now the fun part:</p>'
-            '<p><a class="stat" style="display:inline-block;text-decoration:none;margin-right:.6rem" '
+            lead
+            + '<p><a class="stat" style="display:inline-block;text-decoration:none;margin-right:.6rem" '
             'href="/ui/ask"><b style="font-size:1rem">Ask your first question →</b>'
             "<span>“what did I save about…?”</span></a>"
             '<a class="stat" style="display:inline-block;text-decoration:none" '
@@ -235,6 +252,50 @@ def ui_refresh(request: Request, con=Depends(get_db)):
         "free slice, imported bookmarks are 1¢ each.</p>"
     )
     return page("Sync", state + form + note)
+
+
+def _capped_banner(con, cfg: Config, surface: str) -> str:
+    """Slim persistent strip for cap-hit free accounts on Ask/Feed: the library is partial,
+    here's how to complete it. Predicate-driven (storage.is_capped_free), so any purchase
+    hides it everywhere immediately. Returns '' for everyone else."""
+    if not storage.is_capped_free(con, cfg.free_bookmark_limit):
+        return ""
+    logger.info("funnel.upsell_viewed surface=%s tenant=%s", surface,
+                con.execute("SELECT current_setting('app.current_tenant', true)").fetchone()[0])
+    return (
+        '<div style="background:var(--accent-soft);border-left:3px solid var(--accent);'
+        'border-radius:10px;padding:.55rem .9rem;margin-bottom:1rem;font-size:.9rem;'
+        'color:var(--accent-ink)">'
+        f"Searching your newest {cfg.free_bookmark_limit} bookmarks. Complete your library "
+        "to search everything you've saved. "
+        f'<a href="/ui/complete-library?src={surface}" style="font-weight:700">'
+        "Complete library →</a></div>"
+    )
+
+
+def _first_answer_card(cfg: Config, surface: str = "first_answer") -> str:
+    """The one-time upgrade card beneath a cap-hit user's FIRST successful answer — the
+    moment value was just demonstrated. Non-blocking, no modal, no JS."""
+    return (
+        '<div class="answer" style="border-left:4px solid var(--accent);margin-top:1rem">'
+        f"<b>That answer searched your newest {cfg.free_bookmark_limit} bookmarks.</b><br>"
+        "You have more saved posts that are not searchable yet.<br>"
+        "Complete your library for 1¢ per bookmark, starting at $3.<br>"
+        f'<a class="stat" style="display:inline-block;text-decoration:none;margin-top:.6rem" '
+        f'href="/ui/complete-library?src={surface}">'
+        '<b style="font-size:1rem">Complete my library →</b></a></div>'
+    )
+
+
+@ui_router.get("/ui/complete-library")
+def ui_complete_library(request: Request, src: str = "unknown", con=Depends(get_db)):
+    """Single chokepoint for every upsell CTA — the click event can't be missed or
+    double-counted, and the billing page gets the source for its context block."""
+    cfg = Config.from_env()
+    src = "".join(c for c in src if c.isalnum() or c == "_")[:32] or "unknown"
+    logger.info("funnel.complete_library_clicked src=%s tenant=%s",
+                src, resolve_tenant(request, cfg))
+    return RedirectResponse(url=f"/ui/billing?src={src}", status_code=303)
 
 
 @ui_router.get("/ui/search")
@@ -324,7 +385,8 @@ def _question_card(text: str) -> str:
 
 @ui_router.get("/ui/ask")
 def ui_ask(question: str = "", con=Depends(get_db), ai=Depends(get_ai)):
-    return page("Ask", _ask_form(question))
+    banner = _capped_banner(con, Config.from_env(), "banner_ask")
+    return page("Ask", banner + _ask_form(question))
 
 
 @ui_router.post("/ui/ask")
@@ -387,6 +449,11 @@ def ui_ask_post(request: Request, question: str = Form(...), history: str = Form
     thread = _thread_html(turns)
     latest_q = _question_card(question)
     answer = f'<div class="answer">{md_lite(ans_text)}</div>'
+    # One-time upsell at the moment of demonstrated value: a cap-hit user's FIRST answer.
+    if result.get("ask_number") == 1 and storage.is_capped_free(con, cfg.free_bookmark_limit):
+        logger.info("funnel.upsell_viewed surface=first_answer first_answer=true tenant=%s",
+                    resolve_tenant(request, cfg))
+        answer += _first_answer_card(cfg)
     if retrieved:
         # Two-pane: the answer sticks on the left while the source bookmarks scroll on the right.
         body = (
@@ -489,8 +556,9 @@ def ui_feed(parent: str = "", offset: int = 0, partial: int = 0, con=Depends(get
     groups = [(g["parent"], g["total"]) for g in categorize.category_tree(con)]
     where = f" in {esc(active)}" if active else ""
     note = f"<p class=lead>Newest first{where} · scroll to keep loading. Tap a color to filter.</p>"
+    banner = _capped_banner(con, Config.from_env(), "banner_feed")
     if not posts:
-        return page("Feed", legend(groups, active) + "<p class=muted>No tweets here yet.</p>")
+        return page("Feed", banner + legend(groups, active) + "<p class=muted>No tweets here yet.</p>")
 
     feed = f'<div id="feed" class="cards">{"".join(post_card(p) for p in posts)}</div>'
     sentinel = '<div id="more" class="muted" style="text-align:center;padding:1.6rem">loading…</div>'
@@ -511,7 +579,7 @@ def ui_feed(parent: str = "", offset: int = 0, partial: int = 0, con=Depends(get
         "if(n<" + str(_PAGE) + "){done=true;more.remove();}"
         "});});io.observe(more);})();</script>"
     )
-    return page("Feed", legend(groups, active) + note + feed + sentinel + js)
+    return page("Feed", banner + legend(groups, active) + note + feed + sentinel + js)
 
 
 @ui_router.get("/ui/categories/{category_id}")

@@ -44,7 +44,11 @@ def ask_charged(
     if not used_free and not storage.debit_credits(con, ask_price_usd):
         raise OutOfCredits()
     try:
-        return ask(con, ai, question, k, history=history)
+        result = ask(con, ai, question, k, history=history)
+        # Lifetime counter AFTER success only — "ask_number == 1" drives the one-time
+        # first-answer upsell card in the UI.
+        result["ask_number"] = storage.increment_total_asks(con)
+        return result
     except Exception:
         # Don't charge for a failed answer — return whichever allowance was consumed.
         if used_free:
