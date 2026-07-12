@@ -87,9 +87,11 @@ class FakeAI:
         self.last_history = list(history or [])  # recorded for multi-turn assertions
         ids = [r["id"] for r in retrieved]
         # Leak the cited id into the prose (models do this) to prove the UI's [n] rewrite,
-        # and include a non-retrieved id to prove citation filtering.
+        # and include a non-retrieved id to prove citation filtering. The kept citation is
+        # emitted as an INT the way Haiku does — the clamp must coerce, not drop (live bug).
         leak = f" One post ({ids[0]}) covers this." if ids else ""
-        return {"answer": "Synthesized answer." + leak, "citations": ids[:1] + ["999_absent"]}
+        kept = [int(ids[0])] if ids and ids[0].isdigit() else ids[:1]
+        return {"answer": "Synthesized answer." + leak, "citations": kept + ["999_absent"]}
 
 
 class FakeClient:

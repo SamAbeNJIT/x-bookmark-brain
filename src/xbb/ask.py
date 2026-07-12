@@ -59,7 +59,9 @@ def ask(
     retrieved = rerank(ai, query, search(con, ai, query, max(k, RERANK_POOL)), k)
     result = ai.answer(question, retrieved, history)
     retrieved_ids = {r["id"] for r in retrieved}
-    citations = [c for c in result.get("citations", []) if c in retrieved_ids]
+    # str() both sides: Haiku emits numeric post ids as JSON numbers (Sonnet used strings) —
+    # without coercion the clamp silently dropped every citation (found live, 2026-07-13).
+    citations = [str(c) for c in result.get("citations", []) if str(c) in retrieved_ids]
     return {
         "question": question,
         "answer": result.get("answer"),
