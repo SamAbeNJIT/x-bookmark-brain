@@ -231,8 +231,8 @@ def ui_refresh(request: Request, con=Depends(get_db)):
     )
     note = (
         "<p class=muted style='margin-top:1.4rem'>Incremental — it stops as soon as it "
-        "reaches bookmarks already synced, so it only fetches what's new. New posts cost "
-        "a fraction of a cent each to embed and label.</p>"
+        "reaches bookmarks already synced, so it only fetches what's new. Beyond your "
+        "free slice, imported bookmarks are 1¢ each.</p>"
     )
     return page("Sync", state + form + note)
 
