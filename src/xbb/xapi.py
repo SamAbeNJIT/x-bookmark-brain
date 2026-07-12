@@ -205,6 +205,14 @@ def backfill_via_api(con, client_id: str, incremental: bool = True,
             exists = con.execute("SELECT 1 FROM posts WHERE id = %s", (rec["id"],)).fetchone()
             if not exists and max_total is not None and total >= max_total:
                 capped = True
+                # We just SAW a bookmark we couldn't store — explicit proof the library has
+                # more than the cap. Persist it so upsell copy can say "you have more"
+                # honestly; a cap that fills exactly at a page boundary stays ambiguous
+                # (X has no count API) and gets softer wording.
+                con.execute(
+                    "INSERT INTO sync_state (key, value) VALUES ('library_more_exists', '1') "
+                    "ON CONFLICT (tenant_id, key) DO UPDATE SET value = '1'"
+                )
                 break  # free slice full — stop before storing more
             _upsert_post(con, rec)
             seen_ids.append(rec["id"])

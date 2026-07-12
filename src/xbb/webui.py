@@ -196,12 +196,18 @@ def ui_refresh(request: Request, con=Depends(get_db)):
         if storage.is_capped_free(con, cfg.free_bookmark_limit):
             logger.info("funnel.upsell_viewed surface=post_sync tenant=%s",
                         resolve_tenant(request, cfg))
+            # Only claim "you have more" when a sync PROVED it; an exactly-at-cap library
+            # is ambiguous (X has no count API) and gets the hedged copy — trust > punch.
+            if storage.library_more_exists(con):
+                more = ("You have more bookmarks waiting. Ask your first question, then "
+                        "complete your library whenever you're ready.")
+            else:
+                more = ("If you have more saved posts, complete your library to make them "
+                        "searchable. Ask your first question first.")
             lead = (
                 f'<div class="answer">✅ Your newest {cfg.free_bookmark_limit} bookmarks '
                 "are ready.</div>"
-                '<p class=lead style="margin-top:1rem">You have more bookmarks waiting. '
-                "Ask your first question, then complete your library whenever "
-                "you're ready.</p>"
+                f'<p class=lead style="margin-top:1rem">{more}</p>'
             )
         else:
             lead = (
@@ -273,13 +279,16 @@ def _capped_banner(con, cfg: Config, surface: str) -> str:
     )
 
 
-def _first_answer_card(cfg: Config, surface: str = "first_answer") -> str:
+def _first_answer_card(cfg: Config, more_exists: bool, surface: str = "first_answer") -> str:
     """The one-time upgrade card beneath a cap-hit user's FIRST successful answer — the
-    moment value was just demonstrated. Non-blocking, no modal, no JS."""
+    moment value was just demonstrated. Non-blocking, no modal, no JS. The middle line
+    only asserts "you have more" when a sync proved it (see storage.library_more_exists)."""
+    middle = ("You have more saved posts that are not searchable yet." if more_exists
+              else "If you have more saved posts, they are not searchable yet.")
     return (
         '<div class="answer" style="border-left:4px solid var(--accent);margin-top:1rem">'
         f"<b>That answer searched your newest {cfg.free_bookmark_limit} bookmarks.</b><br>"
-        "You have more saved posts that are not searchable yet.<br>"
+        f"{middle}<br>"
         "Complete your library for 1¢ per bookmark, starting at $3.<br>"
         f'<a class="stat" style="display:inline-block;text-decoration:none;margin-top:.6rem" '
         f'href="/ui/complete-library?src={surface}">'
@@ -453,7 +462,7 @@ def ui_ask_post(request: Request, question: str = Form(...), history: str = Form
     if result.get("ask_number") == 1 and storage.is_capped_free(con, cfg.free_bookmark_limit):
         logger.info("funnel.upsell_viewed surface=first_answer first_answer=true tenant=%s",
                     resolve_tenant(request, cfg))
-        answer += _first_answer_card(cfg)
+        answer += _first_answer_card(cfg, storage.library_more_exists(con))
     if retrieved:
         # Two-pane: the answer sticks on the left while the source bookmarks scroll on the right.
         body = (

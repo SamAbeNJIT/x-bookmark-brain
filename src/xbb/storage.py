@@ -541,6 +541,16 @@ def is_capped_free(con: psycopg.Connection, free_limit: int) -> bool:
     return n >= free_limit
 
 
+def library_more_exists(con: psycopg.Connection) -> bool:
+    """Has a sync PROVEN this tenant's X library holds more than what's stored? Set by
+    backfill when it fetched a bookmark it couldn't store (cap full). Absent = ambiguous
+    (the cap may equal their entire library) — upsell copy must hedge accordingly."""
+    row = con.execute(
+        "SELECT value FROM sync_state WHERE key = 'library_more_exists'"
+    ).fetchone()
+    return bool(row and row[0] == "1")
+
+
 def increment_total_asks(con: psycopg.Connection) -> int:
     """Bump the tenant's lifetime answered-question counter; returns the new total.
     Powers the "first successful answer" upsell trigger (existing tenants start at 0, so

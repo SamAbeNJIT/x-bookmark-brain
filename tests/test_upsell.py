@@ -13,7 +13,17 @@ from xbb.log import logger as xbb_logger
 
 BANNER = "Complete your library to search everything"
 CARD = "Complete my library"
-POST_SYNC = "You have more bookmarks waiting"
+POST_SYNC = "You have more bookmarks waiting"                       # proven-more copy
+POST_SYNC_SOFT = "If you have more saved posts, complete your library"  # ambiguous copy
+
+
+def _confirm_more(dsn):
+    """Simulate what backfill records when it fetched a bookmark it couldn't store."""
+    con = storage.connect(dsn)
+    con.execute("INSERT INTO sync_state (key, value) VALUES ('library_more_exists', '1') "
+                "ON CONFLICT (tenant_id, key) DO UPDATE SET value = '1'")
+    con.commit()
+    con.close()
 
 
 @pytest.fixture
@@ -54,14 +64,65 @@ def test_under_limit_user_sees_no_prompts(client, seeded_db):
     assert CARD not in client.post("/ui/ask", data={"question": "rag evaluation"}).text
 
 
-def test_capped_post_sync_message(capped):
+def test_capped_post_sync_ambiguous_gets_hedged_copy(capped):
+    # Exactly-at-cap with NO proof more exist (their library may be exactly 3): hedge.
     jobs._set(DEFAULT_TENANT_ID, step="done", detail="up to date — 3 new bookmark(s) added")
     html = capped.get("/ui/refresh").text
-    assert "Your newest 3 bookmarks" in html and POST_SYNC in html
-    # Ask stays the primary CTA; the payment PITCH stays off this screen (value first).
-    # (The page's pre-existing footer note mentioning per-bookmark pricing is fine.)
+    assert "Your newest 3 bookmarks" in html
+    assert POST_SYNC_SOFT in html and POST_SYNC not in html
     assert "Ask your first question" in html
     assert CARD not in html and "Complete library →" not in html
+
+
+def test_capped_post_sync_proven_more_gets_strong_copy(capped, seeded_db):
+    _confirm_more(seeded_db)  # backfill saw a bookmark it couldn't store
+    jobs._set(DEFAULT_TENANT_ID, step="done", detail="up to date — 3 new bookmark(s) added")
+    html = capped.get("/ui/refresh").text
+    assert POST_SYNC in html and POST_SYNC_SOFT not in html
+
+
+def test_backfill_records_more_exists_when_capped_mid_page(db, monkeypatch):
+    """A cap that fills MID-page means a bookmark was fetched but not stored — explicit
+    proof more exist; the exact-page-boundary case stays ambiguous (no key written)."""
+    from xbb import xapi
+
+    class _Paged:
+        def __init__(self, con, client_id):
+            self._pages = [{"data": [{"id": str(i), "text": f"post {i}"} for i in range(10)],
+                            "includes": {}}]
+
+        def iter_bookmark_pages(self):
+            yield from self._pages
+
+    monkeypatch.setattr(xapi, "XApiClient", _Paged)
+    con = storage.connect(db)
+    try:
+        xapi.backfill_via_api(con, "cid", incremental=True, max_total=7)  # fills mid-page
+        assert con.execute("SELECT COUNT(*) FROM posts").fetchone()[0] == 7
+        assert storage.library_more_exists(con) is True
+    finally:
+        con.close()
+
+
+def test_backfill_exact_page_boundary_stays_ambiguous(db, monkeypatch):
+    from xbb import xapi
+
+    class _Paged:
+        def __init__(self, con, client_id):
+            self._pages = [{"data": [{"id": str(i), "text": f"post {i}"} for i in range(10)],
+                            "includes": {}}]
+
+        def iter_bookmark_pages(self):
+            yield from self._pages
+
+    monkeypatch.setattr(xapi, "XApiClient", _Paged)
+    con = storage.connect(db)
+    try:
+        xapi.backfill_via_api(con, "cid", incremental=True, max_total=10)  # exactly one page
+        assert con.execute("SELECT COUNT(*) FROM posts").fetchone()[0] == 10
+        assert storage.library_more_exists(con) is False  # can't know -> hedged copy
+    finally:
+        con.close()
 
 
 def test_first_answer_card_appears_exactly_once(capped):
