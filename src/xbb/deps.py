@@ -44,12 +44,18 @@ def get_db(request: Request):
 
 def get_ai(request: Request):
     cfg = Config.from_env()
-    ai = BedrockAIClient(
+    kwargs = dict(
         region=cfg.aws_region,
         embedding_model=cfg.bedrock_embedding_model,
         labeling_model=cfg.bedrock_labeling_model,
         reasoning_model=cfg.bedrock_reasoning_model,
+        answer_model=cfg.answer_model,
     )
+    if cfg.answer_backend == "mantle" and cfg.bedrock_api_key:
+        from .ai import MantleAIClient
+        ai = MantleAIClient(mantle_api_key=cfg.bedrock_api_key, **kwargs)
+    else:
+        ai = BedrockAIClient(**kwargs)
     try:
         yield ai
     finally:

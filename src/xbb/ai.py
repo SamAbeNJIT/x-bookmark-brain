@@ -122,11 +122,16 @@ class BedrockAIClient:
         embedding_model: str | None = None,
         labeling_model: str | None = None,
         reasoning_model: str | None = None,
+        answer_model: str | None = None,
     ) -> None:
         self.region = region
         self.embedding_model = embedding_model
         self.labeling_model = labeling_model
         self.reasoning_model = reasoning_model
+        # Ask answers get their own model knob: eval (2026-07-13, Opus-judged) showed Haiku 4.5
+        # MORE grounded than Sonnet 4.6 (3.8 vs 2.4) at ~equal usefulness, 3.4x faster, 4x
+        # cheaper. Taxonomy derivation stays on reasoning_model (once per user, depth matters).
+        self.answer_model = answer_model or reasoning_model
         self._usage: list[dict[str, Any]] = []  # token counts per call, drained by pop_usage()
 
     def _runtime(self):  # pragma: no cover
@@ -292,26 +297,32 @@ class BedrockAIClient:
             return question
         return rewritten or question
 
-    def answer(
-        self,
-        question: str,
-        retrieved: list[dict[str, Any]],
-        history: list[dict[str, str]] | None = None,
-    ) -> dict[str, Any]:  # pragma: no cover
-        system = (
+    def _answer_system_prompt(self) -> str:
+        # Prompt-eval'd 2026-07-13 (Opus judge, pairwise): "mention each relevant post briefly"
+        # beat "cover ALL posts" on groundedness 3.7 vs 3.0 at equal usefulness — enumeration
+        # over elaboration keeps Haiku honest AND fast.
+        return (
             "Answer the question using ONLY the provided saved posts, considering the prior "
-            "conversation for context. Match your length to the question: answer as fully as "
-            "it deserves, but don't pad. List the ids of the posts you drew on in the "
-            "citations array — NEVER write raw post ids inside the answer text; refer to "
-            "sources naturally (\"one thread argues…\", \"a post by @handle…\"). Reply with "
-            "ONLY JSON: {\"answer\": str, \"citations\": [post_id]}."
+            "conversation for context. Stay STRICTLY grounded: every claim must trace to a "
+            "specific provided post — never add outside knowledge, never generalize beyond "
+            "what a post actually says; when unsure, quote or closely paraphrase the post. "
+            "If several posts are relevant, mention each briefly rather than elaborating on "
+            "a few. Match your length to the question. List the ids of the posts you drew "
+            "on in the citations array — NEVER write raw post ids inside the answer text; "
+            "refer to sources naturally (\"one thread argues…\", \"a post by @handle…\"). "
+            "Reply with ONLY JSON: {\"answer\": str, \"citations\": [post_id]}."
         )
+
+    @staticmethod
+    def _answer_user_prompt(question: str, retrieved: list[dict[str, Any]]) -> str:
         # Send only what the model needs (id/handle/text) — the full dicts (urls, avatars,
         # media json) roughly double the input tokens for zero answer quality.
         slim = [{"id": r.get("id"), "handle": r.get("handle"),
                  "text": (r.get("text") or "")[:800]} for r in retrieved]
-        user = f"Question: {question}\n\nPosts:\n{json.dumps(slim)}"
-        raw = self._invoke_claude(self.reasoning_model, system, user, history=history)
+        return f"Question: {question}\n\nPosts:\n{json.dumps(slim)}"
+
+    @staticmethod
+    def _parse_answer(raw: str) -> dict[str, Any]:
         try:
             result = _extract_json(raw)
         except ValueError:
@@ -321,3 +332,71 @@ class BedrockAIClient:
             return {"answer": raw.strip(), "citations": []}
         result.setdefault("citations", [])
         return result
+
+    def answer(
+        self,
+        question: str,
+        retrieved: list[dict[str, Any]],
+        history: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:  # pragma: no cover
+        raw = self._invoke_claude(self.answer_model, self._answer_system_prompt(),
+                                  self._answer_user_prompt(question, retrieved),
+                                  history=history)
+        return self._parse_answer(raw)
+
+
+class MantleAIClient(BedrockAIClient):
+    """BedrockAIClient with the ANSWER step served by Grok 4.3 on the bedrock-mantle
+    endpoint (OpenAI-compatible chat completions; auth = long-term Bedrock API key).
+    Embeddings, labeling, taxonomy, and rerank stay on invoke_model. Any Mantle failure
+    falls back to the Claude answer path — a model experiment must never break asks."""
+
+    MANTLE_MODEL = "xai.grok-4.3"
+
+    def __init__(self, *args: Any, mantle_api_key: str | None = None, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.mantle_api_key = mantle_api_key
+
+    def _invoke_mantle(self, system: str, user: str,
+                       history: list[dict[str, str]] | None = None,
+                       max_tokens: int = 4096) -> str:  # pragma: no cover
+        import urllib.request
+
+        body = {
+            "model": self.MANTLE_MODEL,
+            "reasoning": {"effort": "none"},  # RAG synthesis; latency beats deliberation here
+            "max_completion_tokens": max_tokens,
+            "messages": ([{"role": "system", "content": system}]
+                         + [{"role": t["role"], "content": t["content"]} for t in (history or [])]
+                         + [{"role": "user", "content": user}]),
+        }
+        req = urllib.request.Request(
+            f"https://bedrock-mantle.{self.region}.api.aws/openai/v1/chat/completions",
+            data=json.dumps(body).encode(),
+            headers={"Authorization": f"Bearer {self.mantle_api_key}",
+                     "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            payload = json.loads(r.read())
+        usage = payload.get("usage") or {}
+        self._usage.append({"model": self.MANTLE_MODEL,
+                            "input_tokens": int(usage.get("prompt_tokens", 0)),
+                            "output_tokens": int(usage.get("completion_tokens", 0))})
+        return payload["choices"][0]["message"]["content"] or ""
+
+    def answer(
+        self,
+        question: str,
+        retrieved: list[dict[str, Any]],
+        history: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:  # pragma: no cover
+        try:
+            raw = self._invoke_mantle(self._answer_system_prompt(),
+                                      self._answer_user_prompt(question, retrieved),
+                                      history=history)
+            if not raw.strip():
+                raise ValueError("empty mantle answer")
+            return self._parse_answer(raw)
+        except Exception:
+            from .log import logger
+            logger.exception("ai.mantle_fallback model=%s", self.MANTLE_MODEL)
+            return super().answer(question, retrieved, history)

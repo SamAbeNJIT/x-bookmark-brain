@@ -1,0 +1,134 @@
+{
+ "baseline": {
+  "mean_precision": 0.613,
+  "k": 30,
+  "per_question": {
+   "What did I save about running AI models locally?": {
+    "relevant": 25,
+    "k": 30
+   },
+   "Which bookmarks compare AI model benchmarks, like Claude versus GPT?": {
+    "relevant": 12,
+    "k": 30
+   },
+   "What advice did I bookmark about building AI coding agents?": {
+    "relevant": 21,
+    "k": 30
+   },
+   "What did I save about prompt engineering or agentic workflow tips?": {
+    "relevant": 29,
+    "k": 30
+   },
+   "What did I save about peptides or nootropics?": {
+    "relevant": 28,
+    "k": 30
+   },
+   "What are the bookmarked takes on Ethereum as an investment?": {
+    "relevant": 28,
+    "k": 30
+   },
+   "Which books were recommended in my bookmarks?": {
+    "relevant": 2,
+    "k": 30
+   },
+   "What did I save about testosterone, hormones, or blood work?": {
+    "relevant": 22,
+    "k": 30
+   },
+   "What threads did I save about American manufacturing and industry?": {
+    "relevant": 13,
+    "k": 30
+   },
+   "What did I bookmark about dating dynamics?": {
+    "relevant": 25,
+    "k": 30
+   },
+   "What wisdom or stoic quotes did I save?": {
+    "relevant": 16,
+    "k": 30
+   },
+   "What did I save about diet controversies, like seed oils?": {
+    "relevant": 15,
+    "k": 30
+   },
+   "What stock picks or investment theses did I bookmark?": {
+    "relevant": 20,
+    "k": 30
+   },
+   "What did I save about Christianity or criticism of churches?": {
+    "relevant": 13,
+    "k": 30
+   },
+   "What funny posts about programmers did I save?": {
+    "relevant": 7,
+    "k": 30
+   }
+  }
+ },
+ "rerank": {
+  "mean_precision": 0.738,
+  "k": 30,
+  "per_question": {
+   "What did I save about running AI models locally?": {
+    "relevant": 29,
+    "k": 30
+   },
+   "Which bookmarks compare AI model benchmarks, like Claude versus GPT?": {
+    "relevant": 14,
+    "k": 30
+   },
+   "What advice did I bookmark about building AI coding agents?": {
+    "relevant": 25,
+    "k": 30
+   },
+   "What did I save about prompt engineering or agentic workflow tips?": {
+    "relevant": 28,
+    "k": 30
+   },
+   "What did I save about peptides or nootropics?": {
+    "relevant": 29,
+    "k": 30
+   },
+   "What are the bookmarked takes on Ethereum as an investment?": {
+    "relevant": 29,
+    "k": 30
+   },
+   "Which books were recommended in my bookmarks?": {
+    "relevant": 21,
+    "k": 30
+   },
+   "What did I save about testosterone, hormones, or blood work?": {
+    "relevant": 30,
+    "k": 30
+   },
+   "What threads did I save about American manufacturing and industry?": {
+    "relevant": 14,
+    "k": 30
+   },
+   "What did I bookmark about dating dynamics?": {
+    "relevant": 27,
+    "k": 30
+   },
+   "What wisdom or stoic quotes did I save?": {
+    "relevant": 19,
+    "k": 30
+   },
+   "What did I save about diet controversies, like seed oils?": {
+    "relevant": 15,
+    "k": 30
+   },
+   "What stock picks or investment theses did I bookmark?": {
+    "relevant": 22,
+    "k": 30
+   },
+   "What did I save about Christianity or criticism of churches?": {
+    "relevant": 23,
+    "k": 30
+   },
+   "What funny posts about programmers did I save?": {
+    "relevant": 7,
+    "k": 30
+   }
+  }
+ }
+}

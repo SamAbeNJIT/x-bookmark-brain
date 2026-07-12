@@ -71,6 +71,12 @@ class Config:
     # The owner's own tenant gets deeper ask retrieval (k=50 vs 30) — a 17k corpus benefits
     # from a wider net; unset = nobody special.
     owner_tenant_id: str | None
+    # Answer-model backend: "bedrock" (Claude via invoke_model) or "mantle" (Grok 4.3 via
+    # the bedrock-mantle endpoint; needs BEDROCK_API_KEY). Mantle falls back to Claude on error.
+    answer_backend: str
+    bedrock_api_key: str | None
+    # Model for ask answers (default: the reasoning model). Eval 2026-07-13: Haiku 4.5.
+    answer_model: str | None
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -104,4 +110,7 @@ class Config:
             ses_sender=os.getenv("SES_SENDER"),
             owner_alert_email=os.getenv("OWNER_ALERT_EMAIL"),
             owner_tenant_id=os.getenv("OWNER_TENANT_ID"),
+            answer_backend=os.getenv("ANSWER_BACKEND", "bedrock"),
+            bedrock_api_key=os.getenv("BEDROCK_API_KEY"),
+            answer_model=os.getenv("ANSWER_MODEL"),
         )

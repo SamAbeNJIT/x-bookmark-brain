@@ -49,6 +49,38 @@ def test_first_turn_skips_the_rewrite(seeded_db, fake_ai):
         con.close()
 
 
+def test_rerank_reorders_and_degrades_gracefully():
+    from xbb.rerank import rerank
+
+    class _RerankAI:
+        def _invoke(self, model, body):
+            assert model.startswith("cohere.rerank")
+            # reverse the candidate order to prove reordering is applied
+            return {"results": [{"index": i} for i in reversed(range(body["top_n"]))]}
+
+    cands = [{"id": str(i), "text": f"post {i}"} for i in range(5)]
+    out = rerank(_RerankAI(), "q", cands, 3)
+    assert [p["id"] for p in out] == ["2", "1", "0"]
+
+    class _BrokenAI:
+        def _invoke(self, model, body):
+            raise RuntimeError("rerank down")
+
+    out = rerank(_BrokenAI(), "q", cands, 3)
+    assert [p["id"] for p in out] == ["0", "1", "2"]  # falls back to hybrid order
+
+
+def test_ask_survives_ai_without_rerank_support(seeded_db, fake_ai):
+    """FakeAI has no _invoke — rerank must degrade to plain hybrid order, not crash."""
+    con = connect(seeded_db)
+    try:
+        index_posts(con, fake_ai)
+        result = ask(con, fake_ai, "rag evaluation", k=3)
+        assert result["answer"] and result["retrieved"]
+    finally:
+        con.close()
+
+
 def test_trim_history_bounds_and_validates():
     # Malformed / hostile input → dropped; well-formed turns bounded in count and length.
     assert trim_history("nonsense") == []
