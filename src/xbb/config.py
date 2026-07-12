@@ -68,6 +68,9 @@ class Config:
     ses_sender: str | None
     # Ops alerts (new signups, purchases) go here; unset = console-log only (local dev).
     owner_alert_email: str | None
+    # The owner's own tenant gets deeper ask retrieval (k=50 vs 30) — a 17k corpus benefits
+    # from a wider net; unset = nobody special.
+    owner_tenant_id: str | None
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -100,4 +103,5 @@ class Config:
             kms_key_id=os.getenv("KMS_KEY_ID"),
             ses_sender=os.getenv("SES_SENDER"),
             owner_alert_email=os.getenv("OWNER_ALERT_EMAIL"),
+            owner_tenant_id=os.getenv("OWNER_TENANT_ID"),
         )

@@ -328,7 +328,7 @@ def ui_ask(question: str = "", con=Depends(get_db), ai=Depends(get_ai)):
 
 
 @ui_router.post("/ui/ask")
-def ui_ask_post(question: str = Form(...), history: str = Form(""),
+def ui_ask_post(request: Request, question: str = Form(...), history: str = Form(""),
                 con=Depends(get_db), ai=Depends(get_ai)):
     # The thread rides in a hidden form field (client-held state, server stays stateless);
     # trim_history both validates the client-editable JSON and bounds what we send the model.
@@ -338,8 +338,11 @@ def ui_ask_post(question: str = Form(...), history: str = Form(""),
         turns = []
     form = _ask_form(question, autofocus=False, history=turns or None)
     cfg = Config.from_env()
+    # Owner perk: deeper retrieval against the 17k corpus.
+    k = 50 if (cfg.owner_tenant_id
+               and resolve_tenant(request, cfg) == cfg.owner_tenant_id) else 30
     try:
-        result = credits.ask_charged(con, ai, question, 30, cfg.ask_price_usd,
+        result = credits.ask_charged(con, ai, question, k, cfg.ask_price_usd,
                                      cfg.free_asks_per_day, history=turns)
     except credits.OutOfCredits:
         msg = (f'<div class="answer">You\'ve used today\'s {cfg.free_asks_per_day} free questions '
