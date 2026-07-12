@@ -101,7 +101,9 @@ def oauth_signin(con=Depends(get_db)):
 def _signin_callback(code: str, state: str, error: str, con) -> RedirectResponse | HTMLResponse:
     """Complete sign-in-with-X: exchange the code, identify the user, find-or-create their
     account, store the (already-granted!) bookmark token under their tenant, set the session,
-    and land new accounts on the Sync page's free-100 offer (no auto-sync — consent first)."""
+    auto-start the free-100 sync, and land new accounts on the progress page. (Owner reversed
+    the earlier consent-first call on 2026-07-12: signing in with X to a bookmark tool IS the
+    consent, and making people find the button was costing conversions.)"""
     if error:
         return authui.login_page(error=f"X sign-in was cancelled ({error}). Try again, or use email.")
     verifier = storage.pop_pkce(con, state)
@@ -128,8 +130,7 @@ def _signin_callback(code: str, state: str, error: str, con) -> RedirectResponse
         mail.send_owner_alert("🆕 x-bookmarks signup", f"New account via Sign in with X: @{handle}",
                               ses_sender=cfg.ses_sender,
                               owner_email=cfg.owner_alert_email, region=cfg.aws_region)
-        # NO auto-sync (owner's call): land them on the Sync page with the free-100 offer and
-        # let them press the button themselves — consent beats surprise.
+        jobs.start(account_id)  # free-100 sync starts immediately; /ui/refresh shows progress
     session = auth.make_session_token(account_id, cfg.session_secret)
     resp = RedirectResponse(url="/ui/refresh" if created else "/", status_code=303)
     resp.set_cookie("xbb_session", session, httponly=True, samesite="lax",
@@ -189,7 +190,17 @@ def ui_refresh(request: Request, con=Depends(get_db)):
     if s["error"]:
         state = f'<div class="answer" style="border-left-color:#d64545">⚠️ {esc(s["error"])}</div>'
     elif s["step"] == "done":
-        state = f'<div class="answer">✅ {esc(s["detail"])}</div>'
+        # The conversion moment: their library just got organized — hand them the next step.
+        state = (
+            f'<div class="answer">✅ {esc(s["detail"])}</div>'
+            '<p class=lead style="margin-top:1rem">Your bookmarks are organized. Now the fun part:</p>'
+            '<p><a class="stat" style="display:inline-block;text-decoration:none;margin-right:.6rem" '
+            'href="/ui/ask"><b style="font-size:1rem">Ask your first question →</b>'
+            "<span>“what did I save about…?”</span></a>"
+            '<a class="stat" style="display:inline-block;text-decoration:none" '
+            'href="/ui/feed"><b style="font-size:1rem">Browse your feed →</b>'
+            "<span>color-coded by topic</span></a></p>"
+        )
     elif running:
         state = (
             f'<div class="answer">⏳ <b>{esc(s["step"])}</b> — {esc(s["detail"])}'

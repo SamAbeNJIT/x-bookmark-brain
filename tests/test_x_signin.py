@@ -50,11 +50,10 @@ def _signin(client):
     return client.get(f"/oauth/callback?code=abc&state={state}", follow_redirects=False)
 
 
-def test_first_x_signin_creates_account_and_session_no_autosync(client, db, fake_x):
+def test_first_x_signin_creates_account_session_and_autostarts_free_sync(client, db, fake_x):
     r = _signin(client)
     assert r.status_code == 303 and r.headers["location"] == "/ui/refresh"
     assert "xbb_session" in r.headers.get("set-cookie", "")
-    assert fake_x == []                     # owner's call: never sync without a button press
     con = storage.connect(db)
     try:
         row = con.execute(
@@ -65,14 +64,18 @@ def test_first_x_signin_creates_account_and_session_no_autosync(client, db, fake
             "SELECT value FROM sync_state WHERE tenant_id = %s AND key = 'x_oauth'",
             (row[0],)).fetchone()
         assert tok is not None
+        # 2026-07-12 conversion fix: the free-100 sync auto-starts for the NEW account
+        assert fake_x == [str(row[0])]
     finally:
         con.close()
 
 
 def test_second_x_signin_reuses_account(client, db, fake_x):
     _signin(client)
+    fake_x.clear()
     r = _signin(client)                      # same X identity signs in again
     assert r.status_code == 303 and r.headers["location"] == "/"   # returning user -> home
+    assert fake_x == []                      # auto-sync is a first-run thing only
     con = storage.connect(db)
     try:
         n = con.execute("SELECT COUNT(*) FROM accounts WHERE x_user_id = '9001'").fetchone()[0]
