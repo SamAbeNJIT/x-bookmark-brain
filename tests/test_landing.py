@@ -29,7 +29,7 @@ def test_anonymous_sees_landing_page(monkeypatch, seeded_db, fake_ai):
     c = _client(monkeypatch, seeded_db, fake_ai)
     r = c.get("/", follow_redirects=False)
     assert r.status_code == 200
-    assert "You saved 1,000 bookmarks" in r.text   # the pain-first pitch, not a login box
+    assert "You saved hundreds of bookmarks" in r.text   # the pain-first pitch, not a login box
     assert 'href="/oauth/signin"' in r.text        # primary CTA goes straight to X OAuth
     assert "/static/feed.png" in r.text
     assert "/terms" in r.text
@@ -41,7 +41,7 @@ def test_signed_in_sees_the_app_home(monkeypatch, seeded_db, fake_ai):
     c.cookies.set(SESSION_COOKIE, auth.make_session_token(cfg.tenant_id, cfg.session_secret))
     r = c.get("/", follow_redirects=False)
     assert r.status_code == 200
-    assert "bookmarks" in r.text and "You saved 1,000 bookmarks" not in r.text
+    assert "bookmarks" in r.text and "You saved hundreds of bookmarks" not in r.text
 
 
 def test_static_screenshots_served(monkeypatch, seeded_db, fake_ai):

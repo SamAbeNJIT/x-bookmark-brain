@@ -94,13 +94,13 @@ def landing_page() -> HTMLResponse:
 <a class=signin href="/login">Sign in</a></nav>
 
 <div class=hero>
-  <h1>You saved 1,000 bookmarks.<br>You can't find one of them.</h1>
+  <h1>You saved hundreds of bookmarks.<br>Now you can't find the one you need.</h1>
   <p class=sub>Every thread you meant to come back to is buried in an endless, unsearchable list.
   x-bookmarks.ai turns your X bookmarks into searchable knowledge: find any saved post in
   seconds, or ask a question and get an answer built from what <b>you</b> saved.</p>
   <a class=cta href="/oauth/signin"><span class=x>𝕏</span>Sign in with X, free</a>
   <div class=freeline><b>Free forever:</b> your last 100 bookmarks organized + 5 AI questions a
-  day. No card, nothing to set up. You're searching your bookmarks about a minute from now.</div>
+  day. No card, nothing to set up. You're searching your bookmarks in minutes.</div>
   <div class=freeline style="margin-top:.35rem">🔒 Read-only bookmark access via X's official
   sign-in. We never post, follow, or touch anything else, and only you can see your library.</div>
 </div>
@@ -138,7 +138,7 @@ def landing_page() -> HTMLResponse:
 </section>
 
 <section>
-  <h2 class=center>From sign-in to searchable in about a minute</h2>
+  <h2 class=center>From sign-in to searchable in minutes</h2>
   <div class=steps>
     <div class=step><span class=n>1</span><b>Sign in with X</b>One tap, official X sign-in.
     Read-only bookmark access. Revoke anytime from your X settings.</div>
