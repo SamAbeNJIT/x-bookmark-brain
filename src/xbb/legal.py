@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from .templates import page
 
-_UPDATED = "June 30, 2026"
+_UPDATED = "July 12, 2026"
 _CONTACT = "support@x-bookmarks.ai"
 
 
@@ -24,9 +24,10 @@ organizes them with AI, and lets you search, browse, and ask questions about the
 provided by the operator of x-bookmarks.ai ("we").</p>
 
 <h3>2. Your account</h3>
-<p>You sign in with your email via a one-time link. You're responsible for keeping access to that
-email secure. You must be legally able to enter this agreement, and you may only connect an X
-account you own or are authorized to use.</p>
+<p>You sign in either with your X account (via X's official OAuth) or with your email via a
+one-time link. You're responsible for keeping access to that X account or email secure. You must
+be legally able to enter this agreement, and you may only connect an X account you own or are
+authorized to use.</p>
 
 <h3>3. Your content</h3>
 <p>Your bookmarks remain yours. You grant us only the rights needed to operate the service:
@@ -75,7 +76,9 @@ def privacy_page():
 
 <h3>What we collect</h3>
 <ul>
-<li><b>Your email address</b> — used to sign you in (magic links) and for service messages.</li>
+<li><b>Your sign-in identity</b> — if you sign in with X: your X user id and handle, used to
+recognize your account. If you sign in by email (or provide one at checkout): your email address,
+used for sign-in links, receipts, and service messages.</li>
 <li><b>Your X bookmarks</b> — the posts you've saved, fetched with your permission via X's
 official API after you click "Connect X." We never see your X password.</li>
 <li><b>X access tokens</b> — stored encrypted (AWS KMS) and bound to your account; used only to
