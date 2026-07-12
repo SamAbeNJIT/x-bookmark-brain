@@ -45,6 +45,21 @@ def test_refresh_ui_renders(client):
     assert "Sync" in r.text
 
 
+def test_pageviews_are_logged_server_side(client):
+    """GET /ui/* emits a ui.view event (path + tenant only — never content)."""
+    import logging
+    from xbb.log import logger as xbb_logger
+    seen = []
+    h = logging.Handler()
+    h.emit = lambda r: seen.append(r.getMessage())
+    xbb_logger.addHandler(h)
+    try:
+        client.get("/ui/refresh")
+        assert any(m.startswith("ui.view page=/ui/refresh tenant=") for m in seen)
+    finally:
+        xbb_logger.removeHandler(h)
+
+
 def test_taxonomy_derive_via_ui(client):
     r = client.post("/ui/taxonomy/derive", follow_redirects=True)
     assert r.status_code == 200

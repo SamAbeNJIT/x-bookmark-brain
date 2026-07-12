@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from . import auth, authui, billing, categorize, credits, legal, mail, pricing, storage
 from .config import Config
-from .deps import SESSION_COOKIE, get_ai, get_db
+from .deps import SESSION_COOKIE, get_ai, get_db, resolve_tenant
 from .log import logger
 from .search import index_posts, search
 from .storage import connect
@@ -457,6 +457,25 @@ def create_app() -> FastAPI:
                 if not (token and auth.verify_session_token(token, cfg.session_secret)):
                     return RedirectResponse("/login", status_code=303)
         return await call_next(request)
+
+    @app.middleware("http")
+    async def _pageview_log(request: Request, call_next):
+        """Server-side page-view events (no JS, no tracking cookies — consistent with the
+        privacy policy's "usage records"): which screens each account visits, so we can see
+        whether users browse the feed/categories or ask-and-bounce. Paths + tenant ids only."""
+        response = await call_next(request)
+        path = request.url.path
+        if request.method == "GET" and response.status_code == 200:
+            try:
+                if path == "/":
+                    logger.info("ui.view page=landing")  # anonymous funnel top
+                elif path.startswith("/ui/"):
+                    cfg = Config.from_env()
+                    tid = resolve_tenant(request, cfg)
+                    logger.info("ui.view page=%s tenant=%s", path, tid)
+            except Exception:
+                pass  # a metrics line must never break a page
+        return response
 
     return app
 
