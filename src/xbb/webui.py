@@ -16,7 +16,7 @@ from .ask import trim_history
 from .config import Config
 from .deps import get_ai, get_db, resolve_tenant
 from .log import logger
-from .search import search
+from .search import posts_by_ids, search
 from .templates import esc, legend, md_lite, page, parent_color, post_card
 
 ui_router = APIRouter()
@@ -336,14 +336,20 @@ def _ai_error(what: str) -> str:
     )
 
 
-def _ask_form(question: str, autofocus: bool = True, history: list | None = None) -> str:
+def _ask_form(question: str, autofocus: bool = True, history: list | None = None,
+              sources: list | None = None) -> str:
     """The ask box. The conversation thread travels in the hidden `history` field — the
-    server stays stateless; each POST carries the turns so far (bounded in ask.trim_history)."""
+    server stays stateless; each POST carries the turns so far (bounded in ask.trim_history).
+    `sources` rides the same way (ids only): earlier turns' retrieved/cited bookmarks, so
+    follow-up answers keep showing them (bounded in trim_sources)."""
     af = " autofocus" if autofocus else ""
     in_thread = bool(history)
     placeholder = "Ask a follow-up…" if in_thread else "Ask a question about your bookmarks…"
     hist_field = (
         f'<input type=hidden name=history value="{esc(json.dumps(history))}">' if history else ""
+    )
+    src_field = (
+        f'<input type=hidden name=sources value="{esc(json.dumps(sources))}">' if sources else ""
     )
     new_convo = (
         '<a href="/ui/ask" class=muted style="font-size:.82rem">↺ new conversation</a>'
@@ -351,8 +357,8 @@ def _ask_form(question: str, autofocus: bool = True, history: list | None = None
     )
     return (
         '<form method=post action="/ui/ask" id="askform">'
-        + hist_field
-        + f'<textarea name=question rows=3 placeholder="{placeholder}"{af}>'
+        + hist_field + src_field
+        + f'<textarea name=question rows={2 if in_thread else 3} placeholder="{placeholder}"{af}>'
         f"{esc(question) if not in_thread else ''}</textarea>"
         '<div class=row style="margin-top:.55rem">'
         f'<button id="askbtn">{"Send" if in_thread else "Ask"}</button>'
@@ -384,12 +390,74 @@ def _thread_html(history: list[dict[str, str]]) -> str:
     return '<div class="thread">' + "".join(bubbles) + "</div>"
 
 
-def _question_card(text: str) -> str:
+def _question_card(text: str, anchor: bool = False) -> str:
     """A question in the thread gets its own accent-tinted card (owner: plain text got lost
-    while scrolling between answer cards)."""
-    return (f'<div class="answer" style="background:var(--accent-soft);'
+    while scrolling between answer cards). `anchor` marks the latest question so JS can snap
+    the thread scroll to it when its answer arrives."""
+    aid = ' id="latestq"' if anchor else ""
+    return (f'<div{aid} class="answer" style="background:var(--accent-soft);'
             f'color:var(--accent-ink);border-radius:12px;padding:.7rem 1rem;'
             f'margin:1.6rem 0 .5rem;font-weight:600">{esc(text)}</div>')
+
+
+# Earlier turns' sources ride a hidden form field as id lists (client-held, like `history`).
+# Bounds mirror ask.HISTORY_MAX_TURNS = 6 (3 exchanges): 3 prior groups, each capped in ids.
+SOURCES_MAX_GROUPS = 3
+SOURCES_MAX_IDS = 60
+
+
+def trim_sources(raw: object) -> list[dict]:
+    """Validate + bound the client-supplied source groups (the field is client-editable by
+    design — same trust model as `history`). Keeps the newest SOURCES_MAX_GROUPS groups."""
+    if not isinstance(raw, list):
+        return []
+    groups = []
+    for g in raw:
+        if not isinstance(g, dict) or not isinstance(g.get("q"), str):
+            continue
+        ids = [str(i) for i in g.get("ids") or [] if isinstance(i, (str, int))]
+        ids = ids[:SOURCES_MAX_IDS]
+        known = set(ids)
+        cited = [str(i) for i in g.get("cited") or [] if str(i) in known]
+        if ids:
+            groups.append({"q": g["q"][:300], "ids": ids, "cited": cited})
+    return groups[:SOURCES_MAX_GROUPS]
+
+
+def merge_sources(prior: list[dict], question: str,
+                  retrieved_ids: list[str], cited_ids: list[str]) -> list[dict]:
+    """Prepend this turn's source group, newest first. A post retrieved again this turn is
+    dropped from the earlier group it was in — the sources pane accumulates across the thread
+    without ever showing the same bookmark twice."""
+    new_ids = [str(i) for i in retrieved_ids][:SOURCES_MAX_IDS]
+    new_set = set(new_ids)
+    kept = []
+    for g in prior:
+        ids = [i for i in g["ids"] if i not in new_set]
+        if ids:
+            remaining = set(ids)
+            kept.append({"q": g["q"], "ids": ids,
+                         "cited": [i for i in g["cited"] if i in remaining]})
+    new_group = {"q": question[:300], "ids": new_ids,
+                 "cited": [str(i) for i in cited_ids if str(i) in new_set]}
+    return [new_group] + kept
+
+
+def _cited_card(p: dict, cited: set[str], refno: dict[str, int],
+                ans_text: str | None = None) -> str:
+    """A post card, with a `★ cited [n]` badge when the answer used it. `ans_text` (latest
+    turn only) gates the [n] suffix to markers that actually appear in the prose."""
+    html = post_card(p)
+    if str(p["id"]) in cited:
+        n = refno.get(str(p["id"]))
+        label = f"★ cited [{n}]" if n and (ans_text is None or f"[{n}]" in ans_text) else "★ cited"
+        html = html.replace(
+            '<div class="head">',
+            '<div class="head"><span class="badge" '
+            f'style="background:var(--accent-soft);color:var(--accent-ink)">{label}</span>',
+            1,
+        )
+    return html
 
 
 @ui_router.get("/ui/ask")
@@ -400,14 +468,19 @@ def ui_ask(question: str = "", con=Depends(get_db), ai=Depends(get_ai)):
 
 @ui_router.post("/ui/ask")
 def ui_ask_post(request: Request, question: str = Form(...), history: str = Form(""),
-                con=Depends(get_db), ai=Depends(get_ai)):
-    # The thread rides in a hidden form field (client-held state, server stays stateless);
-    # trim_history both validates the client-editable JSON and bounds what we send the model.
+                sources: str = Form(""), con=Depends(get_db), ai=Depends(get_ai)):
+    # The thread rides in hidden form fields (client-held state, server stays stateless);
+    # trim_history/trim_sources both validate the client-editable JSON and bound it.
     try:
         turns = trim_history(json.loads(history)) if history else []
     except (json.JSONDecodeError, TypeError):
         turns = []
-    form = _ask_form(question, autofocus=False, history=turns or None)
+    try:
+        prior_sources = trim_sources(json.loads(sources)) if sources else []
+    except (json.JSONDecodeError, TypeError):
+        prior_sources = []
+    form = _ask_form(question, autofocus=False, history=turns or None,
+                     sources=prior_sources or None)
     cfg = Config.from_env()
     # Owner perk: deeper retrieval against the 17k corpus.
     k = 50 if (cfg.owner_tenant_id
@@ -435,28 +508,18 @@ def ui_ask_post(request: Request, question: str = Form(...), history: str = Form
         if pid and pid in ans_text:
             n = refno.setdefault(pid, len(refno) + 1)
             ans_text = ans_text.replace(f"({pid})", f"[{n}]").replace(pid, f"[{n}]")
-    # Next form carries the thread including this exchange (trim_history caps growth).
+    # Next form carries the thread + accumulated sources including this exchange.
     new_turns = turns + [{"role": "user", "content": question},
                          {"role": "assistant", "content": ans_text}]
-    form = _ask_form("", autofocus=False, history=trim_history(new_turns))
+    groups = merge_sources(prior_sources, question,
+                           [str(p["id"]) for p in retrieved], result["citations"])
+    form = _ask_form("", autofocus=False, history=trim_history(new_turns), sources=groups)
 
-    def _card(p):
-        html = post_card(p)
-        if p["id"] in cited:  # flag the ones the answer actually used
-            n = refno.get(p["id"])
-            label = f"★ cited [{n}]" if n and f"[{n}]" in ans_text else "★ cited"
-            html = html.replace(
-                '<div class="head">',
-                '<div class="head"><span class="badge" '
-                f'style="background:var(--accent-soft);color:var(--accent-ink)">{label}</span>',
-                1,
-            )
-        return html
-
-    cards = "".join(_card(p) for p in retrieved)
+    cited_str = {str(c) for c in cited}
+    cards = "".join(_cited_card(p, cited_str, refno, ans_text) for p in retrieved)
     # Prior turns render compactly above; the latest question + answer are the main event.
     thread = _thread_html(turns)
-    latest_q = _question_card(question)
+    latest_q = _question_card(question, anchor=True)
     answer = f'<div class="answer">{md_lite(ans_text)}</div>'
     # One-time upsell at the moment of demonstrated value: a cap-hit user's FIRST answer.
     if result.get("ask_number") == 1 and storage.is_capped_free(con, cfg.free_bookmark_limit):
@@ -464,19 +527,50 @@ def ui_ask_post(request: Request, question: str = Form(...), history: str = Form
                     resolve_tenant(request, cfg))
         answer += _first_answer_card(cfg, storage.library_more_exists(con))
     if retrieved:
-        # Two-pane: the answer sticks on the left while the source bookmarks scroll on the right.
-        body = (
-            '<div class="ask-cols">'
-            f'<div class="ask-left">{thread}{latest_q}{answer}</div>'
-            '<div class="ask-right">'
+        # Right pane: this turn's sources on top, earlier turns' below (never replaced —
+        # each group under its question). Groups already deduped by merge_sources.
+        right = [
             f'<h3>{len(retrieved)} related bookmarks '
             f'<span class=muted>({len(cited)} cited in the answer)</span></h3>'
             f'<div class="cards">{cards}</div>'
-            "</div></div>"
+        ]
+        old_posts = {p["id"]: p for p in
+                     posts_by_ids(con, [i for g in groups[1:] for i in g["ids"]])}
+        for g in groups[1:]:
+            posts = [old_posts[i] for i in g["ids"] if i in old_posts]
+            if not posts:
+                continue
+            grefno = {pid: n + 1 for n, pid in enumerate(g["cited"])}
+            gcards = "".join(_cited_card(p, set(g["cited"]), grefno) for p in posts)
+            right.append(f'<h3 class="src-group">from: “{esc(g["q"][:120])}”</h3>'
+                         f'<div class="cards">{gcards}</div>')
+        # Two-pane chat: the thread scrolls in its own column with the composer docked at
+        # the bottom; on load, snap the scroll so the newest question sits at the top.
+        body = (
+            '<div class="ask-cols">'
+            '<div class="ask-left">'
+            f'<div class="ask-scroll" id="askscroll">{thread}{latest_q}{answer}</div>'
+            f'<div class="ask-composer">{form}</div>'
+            "</div>"
+            f'<div class="ask-right">{"".join(right)}</div>'
+            "</div>"
+            # Snap: page down to the columns (the sticky pane is viewport-sized once there),
+            # then the thread scroll to the newest question, answer below it. Pad the scroll
+            # bottom first so a short thread can still put the question at the top.
+            "<script>var _ac=document.querySelector('.ask-cols');"
+            "if(_ac)window.scrollTo(0,_ac.getBoundingClientRect().top+window.pageYOffset-10);"
+            "var _aq=document.getElementById('latestq'),"
+            "_as=document.getElementById('askscroll');"
+            # (content bottom, not scrollHeight: for a short thread scrollHeight reports the
+            # pane height, which under-computes the padding by exactly the empty gap)
+            "if(_aq&&_as){var _lc=_as.lastElementChild,"
+            "_bot=_lc.offsetTop+_lc.offsetHeight+16,"
+            "_pad=_aq.offsetTop-6+_as.clientHeight-_bot;"
+            "if(_pad>0)_as.style.paddingBottom=_pad+'px';"
+            "_as.scrollTop=Math.max(0,_aq.offsetTop-6);}</script>"
         )
-    else:
-        body = thread + latest_q + answer
-    return page("Ask", form + body, wide=bool(retrieved))
+        return page("Ask", body, wide=True, rail=True)
+    return page("Ask", thread + latest_q + answer + form)
 
 
 @ui_router.get("/ui/feedback")

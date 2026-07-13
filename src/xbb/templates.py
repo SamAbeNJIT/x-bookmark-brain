@@ -86,6 +86,17 @@ _STYLE = """
   .sidebar nav a.active { background: var(--accent); color: #fff; }
   .sidebar nav a .ic { width: 1.1rem; text-align: center; opacity: .9; }
   .side-foot { margin-top: auto; font-size: .76rem; color: #5b5d68; padding: .6rem; }
+  /* rail mode: results pages collapse the sidebar to an icon rail so cards get the width */
+  .brand-mini { display: none; }
+  @media (min-width: 761px) {
+    body.rail .sidebar { width: 64px; align-items: center; padding: 1rem .5rem; }
+    body.rail .brand, body.rail .side-foot, body.rail .sidebar nav a .lbl { display: none; }
+    body.rail .brand-mini { display: block; font-family: var(--display); font-weight: 700;
+                            font-size: 1.25rem; color: #fff; margin-bottom: 1.1rem; }
+    body.rail .sidebar nav a { justify-content: center; padding: .6rem; }
+    body.rail .sidebar nav a .ic { width: auto; font-size: 1.05rem; }
+    body.rail .content { margin-left: 64px; }
+  }
 
   /* content */
   .content { margin-left: 224px; flex: 1; padding: 2.4rem clamp(1.2rem, 4vw, 3.5rem) 5rem; }
@@ -153,14 +164,24 @@ _STYLE = """
   .answer p { margin: 0 0 .7rem; white-space: normal; }
   .answer p:last-child { margin-bottom: 0; }
 
-  /* ask results: answer keeps a comfortable reading width; tweets absorb ALL remaining space */
-  .ask-cols { display: grid; grid-template-columns: minmax(380px, 56ch) 1fr;
+  /* ask results: answer keeps a comfortable reading width; tweets absorb ALL remaining space.
+     The left pane is a chat column: the thread scrolls in .ask-scroll, the composer docks at
+     the bottom (Claude/ChatGPT style). */
+  .ask-cols { display: grid; grid-template-columns: minmax(340px, 46ch) 1fr;
               gap: 1.4rem; align-items: start; }
-  .ask-left { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow-y: auto; }
-  .ask-left .answer { margin: 0; max-width: none; white-space: normal; }
+  .ask-left { position: sticky; top: 1rem; height: calc(100vh - 2rem);
+              display: flex; flex-direction: column; min-height: 0; }
+  .ask-scroll { flex: 1; overflow-y: auto; min-height: 0; position: relative;
+                padding-right: .35rem; }
+  .ask-composer { margin-top: .65rem; border-top: 1px solid var(--line); padding-top: .65rem; }
+  .ask-composer form { margin: 0; }
+  .ask-left .answer { margin: 0 0 .9rem; max-width: none; white-space: normal; }
   .ask-right h3 { margin-top: 0; }
+  .ask-right h3.src-group { margin: 1.5rem 0 .5rem; font-size: .92rem; color: var(--muted);
+                            font-weight: 600; }
   @media (max-width: 900px) { .ask-cols { grid-template-columns: 1fr; }
-    .ask-left { position: static; max-height: none; } }
+    .ask-left { position: static; height: auto; display: block; }
+    .ask-scroll { overflow: visible; padding-right: 0; } }
 
   /* long tweets collapse; tap to expand */
   .post .body.clamp { display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical;
@@ -243,9 +264,11 @@ _NAV_ITEMS = [
 _SIDEBAR = (
     '<aside class="sidebar">'
     '<div class="brand">bookmark<span class="dot">.</span><br>brain</div>'
+    '<div class="brand-mini">b<span class="dot" style="color:var(--accent)">.</span></div>'
     "<nav>"
     + "".join(
-        f'<a href="{href}"><span class="ic">{ic}</span>{label}</a>'
+        f'<a href="{href}" title="{label}"><span class="ic">{ic}</span>'
+        f'<span class="lbl">{label}</span></a>'
         for href, label, ic in _NAV_ITEMS
     )
     + "</nav>"
@@ -267,8 +290,10 @@ _ACTIVE_JS = (
 # Row-major masonry: distribute cards (in DOM/chronological order) into the shortest column,
 # so the top row is the newest items left-to-right and columns pack with no gaps. Exposes
 # window.__masonryAdd(container, html) for the feed's infinite scroll to append more.
-# Collapse long tweet bodies to 8 lines with a Show more/less toggle. Runs BEFORE the masonry
-# script (order in page()) so column heights are measured on the clamped cards.
+# Collapse long tweet bodies to 8 lines with a Show more/less toggle. Defined here but run
+# AFTER masonry lays the columns out (order in page()): the clamp decision measures
+# scrollHeight at the card's real column width — measuring on the wide pre-masonry fallback
+# under-detected long tweets, leaving them expanded with no way to collapse.
 _CLAMP_JS = (
     "<script>window.__clampCards=function(root){"
     "(root||document).querySelectorAll('.post .body:not([data-clamped])').forEach(function(b){"
@@ -278,7 +303,7 @@ _CLAMP_JS = (
     "t.textContent='Show more';"
     "t.onclick=function(){var c=b.classList.toggle('clamp');"
     "t.textContent=c?'Show more':'Show less';};"
-    "b.after(t);});};window.__clampCards();</script>"
+    "b.after(t);});};</script>"
 )
 
 _MASONRY_JS = (
@@ -301,7 +326,10 @@ _MASONRY_JS = (
     "Array.prototype.slice.call(t.querySelectorAll('.post')).forEach(function(card){"
     "card.setAttribute('data-ord',mx++);shortest(c).appendChild(card);});"
     "if(window.__clampCards)__clampCards(c);};"
-    "layout();window.addEventListener('load',layout);"
+    "window.__masonryLayout=layout;"
+    # layout -> clamp at final column width -> relayout so columns rebalance on clamped heights
+    "layout();if(window.__clampCards){__clampCards();layout();}"
+    "window.addEventListener('load',layout);"
     "var tid;window.addEventListener('resize',function(){clearTimeout(tid);tid=setTimeout(layout,150);});"
     "})();</script>"
 )
@@ -327,13 +355,16 @@ def md_lite(text: str | None) -> str:
     return "".join(out)
 
 
-def page(title: str, body: str, wide: bool = False) -> HTMLResponse:
+def page(title: str, body: str, wide: bool = False, rail: bool = False) -> HTMLResponse:
+    """`wide` stretches the content wrap; `rail` also collapses the sidebar to an icon rail
+    (results pages where every horizontal pixel goes to cards)."""
     wrap = "wrap wide" if wide else "wrap"
+    body_cls = ' class="rail"' if rail else ""
     return HTMLResponse(
         "<!doctype html><html lang=en><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width, initial-scale=1'>"
         f"<title>{esc(title)} · bookmark-brain</title>{_HEAD}{_STYLE}</head>"
-        f"<body>{_SIDEBAR}<main class=\"content\"><div class=\"{wrap}\">"
+        f"<body{body_cls}>{_SIDEBAR}<main class=\"content\"><div class=\"{wrap}\">"
         f"<h1>{esc(title)}</h1>{body}</div></main>{_ACTIVE_JS}{_CLAMP_JS}{_MASONRY_JS}</body></html>"
     )
 
