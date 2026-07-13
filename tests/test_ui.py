@@ -76,6 +76,17 @@ def test_feed_view_toggle_grid_list_and_cookie(client, seeded_db, fake_ai):
     assert 'class="cards list"' in r.text
     r = client.get("/ui/feed?view=grid")             # explicit switch back wins
     assert 'class="cards list"' not in r.text and 'class="cards"' in r.text
+    # Category detail pages share the same toggle AND the same cookie preference.
+    cid = None
+    for line in client.get("/ui/categories").text.split('href="/ui/categories/'):
+        if line[:1].isdigit():
+            cid = line.split('"')[0]
+            break
+    assert cid is not None
+    r = client.get(f"/ui/categories/{cid}?view=list")
+    assert 'class="cards list"' in r.text and "☰ List" in r.text
+    r = client.get("/ui/feed")                       # cookie set on category page carries over
+    assert 'class="cards list"' in r.text
 
 
 def test_taxonomy_derive_via_ui(client):

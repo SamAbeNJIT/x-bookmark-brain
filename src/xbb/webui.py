@@ -647,6 +647,30 @@ def ui_categories(con=Depends(get_db)):
 _PAGE = 150
 
 
+def _card_view(request: Request, view: str, base: str, qs: str = ""):
+    """Shared grid/list card-view machinery for any page of post cards: resolve the view
+    (explicit ?view= wins and is remembered; else the xbb_feed_view cookie — ONE preference
+    app-wide), build the toggle HTML, and hand back a page-wrapper that persists the choice.
+    Returns (toggle_html, cards_class, respond)."""
+    if view not in ("grid", "list"):
+        view = request.cookies.get("xbb_feed_view", "grid")
+        view = view if view in ("grid", "list") else "grid"
+    toggle = (
+        '<div class="view-toggle">'
+        f'<a href="{base}?view=grid{qs}" class="{"on" if view == "grid" else ""}">▦ Grid</a>'
+        f'<a href="{base}?view=list{qs}" class="{"on" if view == "list" else ""}">☰ List</a>'
+        "</div>"
+    )
+    cards_class = "cards list" if view == "list" else "cards"
+
+    def respond(title: str, body: str):
+        resp = page(title, body)
+        resp.set_cookie("xbb_feed_view", view, max_age=365 * 24 * 3600, samesite="lax")
+        return resp
+
+    return toggle, cards_class, respond
+
+
 @ui_router.get("/ui/feed")
 def ui_feed(request: Request, parent: str = "", offset: int = 0, partial: int = 0,
             view: str = "", con=Depends(get_db)):
@@ -657,18 +681,8 @@ def ui_feed(request: Request, parent: str = "", offset: int = 0, partial: int = 
     if partial:
         return HTMLResponse("".join(post_card(p) for p in posts))
 
-    # View toggle: masonry grid (default) vs one-card-per-row list (Twitter-style).
-    # Explicit ?view= wins and is remembered in a cookie; otherwise the cookie decides.
-    if view not in ("grid", "list"):
-        view = request.cookies.get("xbb_feed_view", "grid")
-        view = view if view in ("grid", "list") else "grid"
     qs = f"&parent={active}" if active else ""
-    toggle = (
-        '<div class="view-toggle">'
-        f'<a href="/ui/feed?view=grid{qs}" class="{"on" if view == "grid" else ""}">▦ Grid</a>'
-        f'<a href="/ui/feed?view=list{qs}" class="{"on" if view == "list" else ""}">☰ List</a>'
-        "</div>"
-    )
+    toggle, cards_class, respond = _card_view(request, view, "/ui/feed", qs)
 
     groups = [(g["parent"], g["total"]) for g in categorize.category_tree(con)]
     where = f" in {esc(active)}" if active else ""
@@ -676,14 +690,11 @@ def ui_feed(request: Request, parent: str = "", offset: int = 0, partial: int = 
     banner = _capped_banner(con, Config.from_env(), "banner_feed")
 
     def _respond(body: str):
-        resp = page("Feed", body)
-        resp.set_cookie("xbb_feed_view", view, max_age=365 * 24 * 3600, samesite="lax")
-        return resp
+        return respond("Feed", body)
 
     if not posts:
         return _respond(banner + legend(groups, active) + toggle + "<p class=muted>No tweets here yet.</p>")
 
-    cards_class = "cards list" if view == "list" else "cards"
     feed = f'<div id="feed" class="{cards_class}">{"".join(post_card(p) for p in posts)}</div>'
     sentinel = '<div id="more" class="muted" style="text-align:center;padding:1.6rem">loading…</div>'
     done = "true" if len(posts) < _PAGE else "false"
@@ -707,20 +718,21 @@ def ui_feed(request: Request, parent: str = "", offset: int = 0, partial: int = 
 
 
 @ui_router.get("/ui/categories/{category_id}")
-def ui_category(category_id: int, con=Depends(get_db)):
+def ui_category(request: Request, category_id: int, view: str = "", con=Depends(get_db)):
     row = con.execute("SELECT name FROM categories WHERE id = %s", (category_id,)).fetchone()
     name = row[0] if row else "Category"
     posts = categorize.posts_in_category(con, category_id)
+    toggle, cards_class, respond = _card_view(request, view, f"/ui/categories/{category_id}")
     head = (
-        '<p><a href="/ui/categories">← all categories</a></p>'
+        f'{toggle}<p><a href="/ui/categories">← all categories</a></p>'
         f"<p class=lead>{len(posts):,} bookmarks in this category.</p>"
     )
     cards = (
-        f'<div class="cards">{"".join(post_card(p) for p in posts)}</div>'
+        f'<div class="{cards_class}">{"".join(post_card(p) for p in posts)}</div>'
         if posts
         else "<p class=muted>No posts.</p>"
     )
-    return page(name, head + cards)
+    return respond(name, head + cards)
 
 
 @ui_router.get("/ui/unlabeled")
