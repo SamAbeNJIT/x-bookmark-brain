@@ -255,7 +255,7 @@ def ui_refresh(request: Request, con=Depends(get_db)):
     note = (
         "<p class=muted style='margin-top:1.4rem'>Incremental — it stops as soon as it "
         "reaches bookmarks already synced, so it only fetches what's new. Beyond your "
-        "free slice, imported bookmarks are 1¢ each.</p>"
+        "free slice, each new bookmark uses one import (1¢).</p>"
     )
     return page("Sync", state + form + note)
 
@@ -289,7 +289,7 @@ def _first_answer_card(cfg: Config, more_exists: bool, surface: str = "first_ans
         '<div class="answer" style="border-left:4px solid var(--accent);margin-top:1rem">'
         f"<b>That answer searched your newest {cfg.free_bookmark_limit} bookmarks.</b><br>"
         f"{middle}<br>"
-        "Complete your library for 1¢ per bookmark, starting at $3.<br>"
+        "Complete your library — 1¢ per import, from $5.<br>"
         f'<a class="stat" style="display:inline-block;text-decoration:none;margin-top:.6rem" '
         f'href="/ui/complete-library?src={surface}">'
         '<b style="font-size:1rem">Complete my library →</b></a></div>'

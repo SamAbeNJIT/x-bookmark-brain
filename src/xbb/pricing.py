@@ -1,9 +1,12 @@
 """Pricing math for imports and credits — pure, no Stripe, no DB, fully unit-testable.
 
-The import slider sells an ENTITLEMENT of "up to N most-recent bookmarks" without knowing the
-user's true count (counting via the X API would cost ~$0.005/bookmark for every curious signup).
-If their corpus turns out smaller than N, the unused portion is REFUNDED automatically after
-the sync (see jobs) — users only ever pay for bookmarks they actually have.
+IMPORTS (2026-07-13 pivot, third billing model): buyers purchase a dollar amount ($5-$200) of
+prepaid "imports" — 1 import brings 1 saved item into the library (bookmarks today; the unit
+is deliberately source-vague for future sources). The balance (accounts.import_limit) is
+ADDITIVE on top of the free slice and ROLLS OVER: unused imports cover whatever the user
+saves next, so paying customers never re-hit a $-minimum paywall for a handful of new
+bookmarks. No auto-refund (the 2026-07-10 true-up model is retired); refunds are on request
+via support.
 """
 
 from __future__ import annotations
@@ -24,14 +27,18 @@ CREDIT_PACK_BONUS = (          # (minimum amount, bonus fraction) — checked to
 SUB_PRICE_USD = 3.99
 SUB_MONTHLY_CREDITS_USD = 7.50
 
-IMPORT_SLIDER_MIN = 400        # (400-100 free) x 1¢ = $3 minimum charge (owner call, 2026-07-10)
-IMPORT_SLIDER_MAX = 20_000
-IMPORT_SLIDER_STEP = 100
+# Imports purchase band, in DOLLARS (owner call, 2026-07-13: "$5-$200, make it clear how many
+# imports that dollar amount accounts for"). $5 floor keeps Stripe's 30¢+2.9% fee tolerable.
+IMPORT_MIN_USD = 5.0
+IMPORT_MAX_USD = 200.0
+IMPORT_STEP_USD = 5.0
 
 
-def import_price_usd(n: int, free_limit: int, per_bookmark_usd: float) -> float:
-    """Price for an entitlement of `n` total bookmarks; the free slice is deducted."""
-    return round(max(0, n - free_limit) * per_bookmark_usd, 2)
+def imports_for_usd(amount_usd: float, per_import_usd: float) -> int:
+    """How many imports a dollar amount buys (e.g. $10 at 1¢ -> 1,000)."""
+    if per_import_usd <= 0:
+        return 0
+    return int(round(amount_usd / per_import_usd))
 
 
 def credits_for_topup(amount_usd: float) -> float:

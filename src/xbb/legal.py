@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from .templates import page
 
-_UPDATED = "July 12, 2026"
+_UPDATED = "July 13, 2026"
 _CONTACT = "support@x-bookmarks.ai"
 
 
@@ -36,10 +36,12 @@ or show it to other users.</p>
 
 <h3>4. Free tier, payments, and credits</h3>
 <p>The free tier includes importing a limited number of your most recent bookmarks and a limited
-number of AI questions per day. Paid features include a one-time full-import charge and prepaid
-credits consumed per AI question. Payments are processed by Stripe; we never see your card number.
-Credits have no cash value, are non-transferable, and are refundable only where required by law —
-contact us at {_CONTACT} if something went wrong and we'll make it right.</p>
+number of AI questions per day. Paid features include prepaid <b>imports</b> (each import brings
+one saved post into your library; unused imports remain on your account for future syncs) and
+prepaid credits consumed per AI question. Payments are processed by Stripe; we never see your
+card number. Imports and credits have no cash value and are non-transferable; they are
+refundable on request and where required by law — contact us at {_CONTACT} if something went
+wrong and we'll make it right.</p>
 
 <h3>5. Acceptable use</h3>
 <p>Don't abuse the service: no attempts to access other users' data, probe or overload the

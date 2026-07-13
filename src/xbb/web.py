@@ -83,7 +83,7 @@ def _apply_payment_event(con, event: dict) -> bool:
             count = 0
         if count > 0:
             storage.add_import_limit(con, account_id, count)
-            # Remember the payment so the sync's true-up can refund unused capacity.
+            # Payment ref kept for support context (on-request refunds; no auto true-up).
             storage.set_import_payment(con, account_id, obj.get("payment_intent"), paid)
             logger.info("billing.import_paid tenant=%s count=%d paid=%.2f", account_id, count, paid)
             _purchase_alert(f"{buyer} bought an import of up to {count:,} bookmarks (${paid:.2f})")
@@ -264,10 +264,10 @@ def create_app() -> FastAPI:
                 "this unlocks the rest.</li>"
                 "<li>X doesn't reveal your exact total until the full library is scanned.</li>"
                 "<li>You authorize the amount below before any large fetch begins.</li>"
-                f"<li>{int(cfg.price_per_bookmark_usd * 100)}¢ per imported bookmark, "
-                f"${pricing.IMPORT_SLIDER_MIN * cfg.price_per_bookmark_usd:.0f} minimum.</li>"
-                "<li>You'll never be charged beyond the amount you authorize — unused "
-                "capacity refunds to your card automatically.</li></ul></div>"
+                f"<li>{int(cfg.price_per_bookmark_usd * 100)}¢ per import, "
+                f"${pricing.IMPORT_MIN_USD:.0f} minimum.</li>"
+                "<li>Anything you don't use stays on your account as imports for everything "
+                "you save next — refund on request anytime.</li></ul></div>"
             )
         body += (f'<div class="answer"><b>{free_left} free question(s) left today</b> '
                  f"(resets daily) · <b>credit balance: ${bal:.2f}</b> "
@@ -284,23 +284,25 @@ def create_app() -> FastAPI:
                      + ").</p>")
             if cfg.stripe_secret_key:
                 cents = int(cfg.price_per_bookmark_usd * 100)
+                per = cfg.price_per_bookmark_usd
+                default_usd = 10
                 body += (
-                    "<p><b>Import more of your history</b> — pick how many of your most recent "
-                    f"bookmarks to unlock ({cents}¢ each; your first {cfg.free_bookmark_limit} are free). "
-                    "Have fewer than you pick? <b>The difference is refunded to your card</b> "
-                    "automatically — you only pay for bookmarks you actually have.</p>"
+                    "<p><b>Buy imports</b> — each import brings one saved post into your "
+                    f"library, {cents}¢ each, on top of your free {cfg.free_bookmark_limit}. "
+                    "<b>Unused imports stay on your account</b> and cover whatever you save "
+                    "next. Refunds on request, anytime.</p>"
                     '<form method=post action="/billing/checkout">'
                     '<input type=hidden name=kind value="import">'
-                    f'<input type=range name=count id=imp_n min={pricing.IMPORT_SLIDER_MIN} '
-                    f'max={pricing.IMPORT_SLIDER_MAX} step={pricing.IMPORT_SLIDER_STEP} '
-                    'value="1000" style="width:100%" '
-                    "oninput=\"document.getElementById('imp_lbl').textContent="
-                    "Number(this.value).toLocaleString();"
-                    "document.getElementById('imp_price').textContent="
-                    f"((Math.max(0,this.value-{cfg.free_bookmark_limit}))*{cfg.price_per_bookmark_usd}).toFixed(2)\">"
+                    f'<input type=range name=amount id=imp_usd min={pricing.IMPORT_MIN_USD:.0f} '
+                    f'max={pricing.IMPORT_MAX_USD:.0f} step={pricing.IMPORT_STEP_USD:.0f} '
+                    f'value="{default_usd}" style="width:100%" '
+                    "oninput=\"document.getElementById('imp_amt').textContent=this.value;"
+                    "document.getElementById('imp_n').textContent="
+                    f"Math.round(this.value/{per}).toLocaleString()\">"
                     '<div class=row style="margin:.4rem 0 .6rem">'
-                    '<span>up to <b id=imp_lbl>1,000</b> bookmarks</span>'
-                    '<span style="margin-left:auto">$<b id=imp_price>9.00</b> one-time</span></div>'
+                    f'<span>$<b id=imp_amt>{default_usd}</b> one-time</span>'
+                    '<span style="margin-left:auto">= <b id=imp_n>'
+                    f'{pricing.imports_for_usd(default_usd, per):,}</b> imports</span></div>'
                     "<button>Complete my library</button></form>"
                 )
 
@@ -344,13 +346,13 @@ def create_app() -> FastAPI:
                       success_url=base + "/billing/success", cancel_url=base + "/ui/billing")
 
         if kind == "import":
-            n = max(pricing.IMPORT_SLIDER_MIN, min(int(count), pricing.IMPORT_SLIDER_MAX))
-            price = pricing.import_price_usd(n, cfg.free_bookmark_limit, cfg.price_per_bookmark_usd)
-            if price <= 0:
+            price = max(pricing.IMPORT_MIN_USD, min(float(amount or 0), pricing.IMPORT_MAX_USD))
+            n = pricing.imports_for_usd(price, cfg.price_per_bookmark_usd)
+            if n <= 0:
                 return RedirectResponse("/ui/billing", status_code=303)
             url = billing.create_amount_session(
                 amount_usd=price,
-                product_name=f"Import your {n:,} most recent bookmarks — x-bookmarks.ai",
+                product_name=f"{n:,} imports — x-bookmarks.ai",
                 metadata={"kind": "import", "count": str(n), "account_id": account_id}, **common)
         elif kind == "credits":
             # 2026-07-10 pivot: subscriptions are gone; packs grant bonus credits instead.
@@ -376,9 +378,9 @@ def create_app() -> FastAPI:
     @app.get("/billing/success")
     def billing_success_route():
         return page("Billing", '<div class="answer">🎉 Thanks! Your purchase is being applied. '
-                    "If you bought an import, <b>your library is importing right now</b> — watch "
-                    'progress on the <a href="/ui/refresh">Sync page</a>. Have fewer bookmarks '
-                    "than you bought? The difference refunds to your card automatically.</div>"
+                    "If you bought imports, <b>your library is importing right now</b> — watch "
+                    'progress on the <a href="/ui/refresh">Sync page</a>. Unused imports stay '
+                    "on your account for whatever you save next.</div>"
                     '<p><a href="/ui/billing">Back to billing</a></p>')
 
     @app.post("/billing/webhook")

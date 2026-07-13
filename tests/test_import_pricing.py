@@ -11,10 +11,12 @@ from xbb import pricing, storage
 from xbb.config import DEFAULT_TENANT_ID, Config
 
 
-def test_import_price_math():
-    assert pricing.import_price_usd(1000, 100, 0.01) == 9.00   # first 100 free
-    assert pricing.import_price_usd(500, 100, 0.01) == 4.00
-    assert pricing.import_price_usd(100, 100, 0.01) == 0.0     # all free
+def test_imports_for_usd_math():
+    # 2026-07-13 pivot: buy dollars, get imports (1¢ each), additive on top of the free slice.
+    assert pricing.imports_for_usd(10.0, 0.01) == 1000
+    assert pricing.imports_for_usd(5.0, 0.01) == 500       # band minimum
+    assert pricing.imports_for_usd(200.0, 0.01) == 20000   # band maximum
+    assert pricing.imports_for_usd(10.0, 0) == 0           # degenerate rate -> no free imports
     # Pack bonuses (2026-07-10 pivot): +10% at $5, +20% at $10, +30% at $20; none below $5.
     assert pricing.credits_for_topup(4.99) == 4.99
     assert pricing.credits_for_topup(5.00) == 5.50
@@ -49,7 +51,7 @@ def test_import_purchase_raises_entitlement(client, db):
     con = storage.connect(db)
     try:
         assert storage.import_limit(con) == 1500
-        # the payment reference is remembered for the refund true-up
+        # the payment reference is remembered for support-context (on-request refunds)
         assert con.execute("SELECT import_payment_intent, import_paid_usd FROM accounts "
                            "WHERE id = %s", (DEFAULT_TENANT_ID,)).fetchone() == ("pi_test_123", 14.0)
         # effective cap = free slice + purchased
@@ -109,104 +111,67 @@ def test_sync_gate_respects_purchased_entitlement(client, db, monkeypatch):
     assert r.headers["location"] == "/ui/refresh"          # gate open again
 
 
-# --------------------------------------------------------------------------- refund true-up
-
-from xbb import jobs
+# --------------------------------------------------- rolling imports balance (no true-up)
 
 
-class _Refunds:
-    def __init__(self):
-        self.calls = []
+def test_unused_imports_roll_over_no_refund(db, monkeypatch):
+    """2026-07-13 pivot: a sync that exhausts the timeline below the cap must NOT shrink the
+    balance and must NOT touch Stripe — unused imports persist for future syncs."""
+    from xbb import billing, jobs, xapi
 
-    def __call__(self, api_key, payment_intent, amount_usd):
-        self.calls.append((payment_intent, amount_usd))
+    def _no_refund(*a, **k):
+        raise AssertionError("refund_payment must never be called by a sync")
+    monkeypatch.setattr(billing, "refund_payment", _no_refund)
 
+    class _TinyTimeline:  # 5 bookmarks total; cap will be far above
+        def __init__(self, con, client_id):
+            self._pages = [{"data": [{"id": f"r{i}", "text": f"post {i}"} for i in range(5)],
+                            "includes": {}}]
 
-@pytest.fixture
-def true_up_env(db, monkeypatch):
-    """A tenant with a purchased-but-oversized import; refund + alerts stubbed."""
-    refunds = _Refunds()
-    monkeypatch.setattr("xbb.billing.refund_payment", refunds)
-    monkeypatch.setattr("xbb.mail.send_owner_alert", lambda *a, **k: None)
+        def iter_bookmark_pages(self):
+            yield from self._pages
+
+    monkeypatch.setattr(xapi, "XApiClient", _TinyTimeline)
     con = storage.connect(db)
-    con.execute("UPDATE accounts SET ingestion_paid = false WHERE id = %s", (DEFAULT_TENANT_ID,))
-    con.commit(); con.close()
-    return refunds
-
-
-def _setup_purchase(db, import_limit, pi, paid):
-    con = storage.connect(db)
-    storage.add_import_limit(con, DEFAULT_TENANT_ID, import_limit)
-    storage.set_import_payment(con, DEFAULT_TENANT_ID, pi, paid)
-    return con  # caller closes
-
-
-def test_true_up_full_refund_when_corpus_below_free_slice(db, true_up_env):
-    # mooneymen's case: paid $4 for 500, owns fewer than the free 100 -> full $4 back.
-    con = _setup_purchase(db, 500, "pi_full", 4.00)
     try:
-        cfg = Config.from_env()
-        jobs._import_true_up(cfg, con, DEFAULT_TENANT_ID, cap=600, purchased=500)
-        assert true_up_env.calls == [("pi_full", 4.00)]
-        assert storage.import_limit(con) == 0                 # unused entitlement released
-        assert storage.get_import_payment(con) == (None, 0.0)  # double-refund guard cleared
+        con.execute("UPDATE accounts SET ingestion_paid = false WHERE id = %s",
+                    (DEFAULT_TENANT_ID,))
+        con.commit()
+        storage.add_import_limit(con, DEFAULT_TENANT_ID, 1000)     # bought $10 of imports
+        storage.set_import_payment(con, DEFAULT_TENANT_ID, "pi_keep", 10.00)
+        added = xapi.backfill_via_api(con, "cid", incremental=True,
+                                      max_total=storage.effective_import_cap(con, 100))
+        assert added == 5                                           # whole timeline stored
+        assert storage.import_limit(con) == 1000                    # balance untouched
+        assert storage.get_import_payment(con) == ("pi_keep", 10.00)  # ref kept for support
     finally:
         con.close()
 
 
-def test_true_up_partial_refund_when_partially_used(db, true_up_env, seeded_db_posts_250):
-    # 250 posts, free 100 -> 150 chargeable ($1.50 of the $4 paid) -> $2.50 back.
-    con = _setup_purchase(db, 500, "pi_part", 4.00)
-    try:
-        cfg = Config.from_env()
-        jobs._import_true_up(cfg, con, DEFAULT_TENANT_ID, cap=600, purchased=500)
-        assert true_up_env.calls == [("pi_part", 2.50)]
-    finally:
-        con.close()
+def test_checkout_import_maps_dollars_to_imports(client, db, monkeypatch):
+    """$10 -> count=1000 in session metadata; out-of-band amounts clamp to the $5-$200 band."""
+    from xbb import billing
+    sessions = []
 
+    def _fake_session(**kwargs):
+        sessions.append(kwargs)
+        return "/ui/billing"  # redirect target stands in for the Stripe URL
+    monkeypatch.setattr(billing, "create_amount_session", _fake_session)
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_dummy")
 
-@pytest.fixture
-def seeded_db_posts_250(db):
-    con = storage.connect(db)
-    for i in range(250):
-        con.execute("INSERT INTO posts (id, text) VALUES (%s, %s)", (f"tu{i}", f"post {i}"))
-    con.commit(); con.close()
-    return db
+    client.post("/billing/checkout", data={"kind": "import", "amount": "10"},
+                follow_redirects=False)
+    assert sessions[-1]["amount_usd"] == 10.0
+    assert sessions[-1]["metadata"]["count"] == "1000"
+    assert "1,000 imports" in sessions[-1]["product_name"]
 
+    client.post("/billing/checkout", data={"kind": "import", "amount": "1"},
+                follow_redirects=False)
+    assert sessions[-1]["amount_usd"] == pricing.IMPORT_MIN_USD    # clamped up to $5
 
-def test_true_up_no_refund_when_entitlement_filled(db, true_up_env, seeded_db_posts_250):
-    con = _setup_purchase(db, 150, "pi_none", 1.50)  # cap 250 == corpus 250: fully used
-    try:
-        cfg = Config.from_env()
-        jobs._import_true_up(cfg, con, DEFAULT_TENANT_ID, cap=250, purchased=150)
-        assert true_up_env.calls == []
-        assert storage.get_import_payment(con) == ("pi_none", 1.50)  # ref kept (nothing refunded)
-    finally:
-        con.close()
-
-
-def test_true_up_second_run_does_not_double_refund(db, true_up_env):
-    con = _setup_purchase(db, 500, "pi_once", 4.00)
-    try:
-        cfg = Config.from_env()
-        jobs._import_true_up(cfg, con, DEFAULT_TENANT_ID, cap=600, purchased=500)
-        jobs._import_true_up(cfg, con, DEFAULT_TENANT_ID, cap=100, purchased=0)  # post-release state
-        assert len(true_up_env.calls) == 1
-    finally:
-        con.close()
-
-
-def test_true_up_refund_failure_never_raises(db, true_up_env, monkeypatch):
-    def _boom(api_key, payment_intent, amount_usd):
-        raise RuntimeError("stripe down")
-    monkeypatch.setattr("xbb.billing.refund_payment", _boom)
-    con = _setup_purchase(db, 500, "pi_fail", 4.00)
-    try:
-        cfg = Config.from_env()
-        jobs._import_true_up(cfg, con, DEFAULT_TENANT_ID, cap=600, purchased=500)  # must not raise
-        assert storage.get_import_payment(con) == ("pi_fail", 4.00)  # ref kept for manual retry
-    finally:
-        con.close()
+    client.post("/billing/checkout", data={"kind": "import", "amount": "9999"},
+                follow_redirects=False)
+    assert sessions[-1]["amount_usd"] == pricing.IMPORT_MAX_USD    # clamped down to $200
 
 
 def test_category_target_scales_and_caps():

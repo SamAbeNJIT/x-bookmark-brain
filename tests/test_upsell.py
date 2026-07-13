@@ -164,8 +164,8 @@ def test_billing_context_block_shown_when_arriving_from_upsell(capped, monkeypat
     html = capped.get("/ui/billing?src=first_answer").text
     assert "Complete your library" in html
     assert "X doesn't reveal your exact total" in html
-    assert "unused" in html and "refunds to your card" in html.replace("\n", " ")
-    assert "Complete my library" in html          # renamed slider button
+    assert "stays on your account" in html and "refund on request" in html
+    assert "Complete my library" in html          # slider button
     assert "Complete your library" not in capped.get("/ui/billing").text.split("free question")[0]
 
 

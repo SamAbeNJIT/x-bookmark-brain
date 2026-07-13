@@ -161,9 +161,9 @@ def landing_page() -> HTMLResponse:
     <div class="price hot"><div class=amt>Free</div><div class=per>forever, no card</div>
       <ul><li>Your 100 most recent bookmarks, organized</li><li>5 AI questions every day</li>
       <li>Full search &amp; browsing</li></ul></div>
-    <div class=price><div class=amt>1¢</div><div class=per>per bookmark, one-time</div>
-      <ul><li>Unlock your <b>entire</b> history, from $3</li>
-      <li>Only pay for what you have; unused capacity refunds to your card automatically</li></ul></div>
+    <div class=price><div class=amt>1¢</div><div class=per>per import, one-time</div>
+      <ul><li>Unlock your <b>entire</b> history, from $5</li>
+      <li>Unused imports roll over. They cover whatever you save next</li></ul></div>
     <div class=price><div class=amt>5¢</div><div class=per>per question</div>
       <ul><li>No subscription. $1 ≈ 20 questions</li>
       <li>Bigger packs get up to 30% bonus questions</li></ul></div>

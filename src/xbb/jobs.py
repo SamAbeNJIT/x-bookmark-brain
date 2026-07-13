@@ -41,45 +41,9 @@ def _set(tenant_id: str, **kw: Any) -> None:
         _jobs.setdefault(tenant_id, dict(_IDLE)).update(kw)
 
 
-def _import_true_up(cfg: Config, con, tenant_id: str, cap: int | None, purchased: int) -> None:
-    """Unused purchased capacity → automatic REFUND (2026-07-10 pivot: users only pay for the
-    bookmarks they actually have; the old credits-conversion is retired). Runs after backfill:
-    if the timeline exhausted below the entitlement, release the unused limit and refund
-    everything paid beyond what was actually chargeable. Money hiccups never kill the sync."""
-    from . import billing, mail, storage
-
-    if cap is None or purchased <= 0:
-        return
-    total_now = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
-    if total_now >= cap:  # entitlement filled exactly — nothing unused
-        return
-    unused = min(cap - total_now, purchased)
-    if unused > 0:
-        storage.reduce_import_limit(con, unused)
-    pi, paid = storage.get_import_payment(con)
-    used_chargeable = max(0, total_now - cfg.free_bookmark_limit) * cfg.price_per_bookmark_usd
-    refund = round(min(paid, paid - used_chargeable), 2)
-    if refund <= 0 or not pi:
-        return
-    try:
-        billing.refund_payment(cfg.stripe_secret_key, pi, refund)
-        storage.set_import_payment(con, tenant_id, None, None)  # double-refund guard
-    except Exception as e:
-        logger.exception("billing.refund_failed tenant=%s pi=%s amount=%.2f: %s",
-                         tenant_id, pi, refund, e)
-        mail.send_owner_alert(
-            "💸 REFUND FAILED — manual action needed",
-            f"tenant {tenant_id}: refund ${refund:.2f} on {pi} failed ({type(e).__name__}). "
-            "Issue it from the Stripe dashboard.",
-            ses_sender=cfg.ses_sender, owner_email=cfg.owner_alert_email, region=cfg.aws_region)
-    else:
-        logger.info("billing.refund tenant=%s amount=%.2f", tenant_id, refund)
-        mail.send_owner_alert(
-            "💸 x-bookmarks auto-refund",
-            f"tenant {tenant_id}: imported everything ({total_now} bookmarks); refunded "
-            f"${refund:.2f} of unused import capacity.",
-            ses_sender=cfg.ses_sender, owner_email=cfg.owner_alert_email, region=cfg.aws_region)
-        _set(tenant_id, detail=f"imported everything — ${refund:.2f} refunded to your card")
+# NOTE: the automatic import true-up/refund (2026-07-10..13) is RETIRED — unused imports now
+# ROLL OVER as a prepaid balance (2026-07-13 pivot; see pricing.py docstring). Refunds are
+# on-request via support: billing.refund_payment + the payment ref stored on accounts.
 
 
 def _run(cfg: Config, tenant_id: str) -> None:
@@ -108,8 +72,6 @@ def _run(cfg: Config, tenant_id: str) -> None:
                                       incremental=not full_import, max_total=cap)
         _set(tenant_id, added=added)
         logger.info("sync.backfill tenant=%s added=%d cap=%s", tenant_id, added, cap)
-
-        _import_true_up(cfg, con, tenant_id, cap, purchased)
 
         ai = BedrockAIClient(
             region=cfg.aws_region,
