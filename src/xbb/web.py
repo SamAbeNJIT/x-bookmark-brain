@@ -278,10 +278,14 @@ def create_app() -> FastAPI:
             body += "<p class=muted>✓ Full bookmark history unlocked.</p>"
         else:
             n = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
-            body += (f"<p class=lead>{min(n, cap):,} of your {cap:,}-bookmark allowance imported "
-                     f"({cfg.free_bookmark_limit:,} free"
-                     + (f" + {cap - cfg.free_bookmark_limit:,} purchased" if cap > cfg.free_bookmark_limit else "")
-                     + ").</p>")
+            remaining = max(cap - n, 0)
+            purchased_n = cap - cfg.free_bookmark_limit
+            body += (
+                f"<p class=lead><b>{remaining:,} imports remaining</b> · "
+                f"{min(n, cap):,} of your library imported "
+                f"({cfg.free_bookmark_limit:,} free"
+                + (f" + {purchased_n:,} purchased" if purchased_n > 0 else "")
+                + "). Unused imports roll over and cover whatever you save next.</p>")
             if cfg.stripe_secret_key:
                 cents = int(cfg.price_per_bookmark_usd * 100)
                 per = cfg.price_per_bookmark_usd
