@@ -60,6 +60,24 @@ def test_pageviews_are_logged_server_side(client):
         xbb_logger.removeHandler(h)
 
 
+def test_feed_view_toggle_grid_list_and_cookie(client, seeded_db, fake_ai):
+    from xbb import categorize
+    from xbb.storage import connect
+    con = connect(seeded_db)
+    categorize.save_taxonomy(con, [{"name": "RAG"}, {"name": "Agents"}])
+    categorize.assign_unassigned(con, fake_ai)       # feed only shows categorized posts
+    con.close()
+    r = client.get("/ui/feed")                       # default: masonry grid
+    assert 'class="cards"' in r.text and "▦ Grid" in r.text and "☰ List" in r.text
+    r = client.get("/ui/feed?view=list")             # explicit list view
+    assert 'class="cards list"' in r.text
+    assert "xbb_feed_view=list" in r.headers.get("set-cookie", "")
+    r = client.get("/ui/feed")                       # cookie remembered
+    assert 'class="cards list"' in r.text
+    r = client.get("/ui/feed?view=grid")             # explicit switch back wins
+    assert 'class="cards list"' not in r.text and 'class="cards"' in r.text
+
+
 def test_taxonomy_derive_via_ui(client):
     r = client.post("/ui/taxonomy/derive", follow_redirects=True)
     assert r.status_code == 200

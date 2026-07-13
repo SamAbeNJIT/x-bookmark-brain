@@ -648,7 +648,8 @@ _PAGE = 150
 
 
 @ui_router.get("/ui/feed")
-def ui_feed(parent: str = "", offset: int = 0, partial: int = 0, con=Depends(get_db)):
+def ui_feed(request: Request, parent: str = "", offset: int = 0, partial: int = 0,
+            view: str = "", con=Depends(get_db)):
     active = parent or None
     posts = categorize.feed_posts(con, parent=active, limit=_PAGE, offset=offset)
 
@@ -656,14 +657,34 @@ def ui_feed(parent: str = "", offset: int = 0, partial: int = 0, con=Depends(get
     if partial:
         return HTMLResponse("".join(post_card(p) for p in posts))
 
+    # View toggle: masonry grid (default) vs one-card-per-row list (Twitter-style).
+    # Explicit ?view= wins and is remembered in a cookie; otherwise the cookie decides.
+    if view not in ("grid", "list"):
+        view = request.cookies.get("xbb_feed_view", "grid")
+        view = view if view in ("grid", "list") else "grid"
+    qs = f"&parent={active}" if active else ""
+    toggle = (
+        '<div class="view-toggle">'
+        f'<a href="/ui/feed?view=grid{qs}" class="{"on" if view == "grid" else ""}">▦ Grid</a>'
+        f'<a href="/ui/feed?view=list{qs}" class="{"on" if view == "list" else ""}">☰ List</a>'
+        "</div>"
+    )
+
     groups = [(g["parent"], g["total"]) for g in categorize.category_tree(con)]
     where = f" in {esc(active)}" if active else ""
-    note = f"<p class=lead>Newest first{where} · scroll to keep loading. Tap a color to filter.</p>"
+    note = f"{toggle}<p class=lead>Newest first{where} · scroll to keep loading. Tap a color to filter.</p>"
     banner = _capped_banner(con, Config.from_env(), "banner_feed")
-    if not posts:
-        return page("Feed", banner + legend(groups, active) + "<p class=muted>No tweets here yet.</p>")
 
-    feed = f'<div id="feed" class="cards">{"".join(post_card(p) for p in posts)}</div>'
+    def _respond(body: str):
+        resp = page("Feed", body)
+        resp.set_cookie("xbb_feed_view", view, max_age=365 * 24 * 3600, samesite="lax")
+        return resp
+
+    if not posts:
+        return _respond(banner + legend(groups, active) + toggle + "<p class=muted>No tweets here yet.</p>")
+
+    cards_class = "cards list" if view == "list" else "cards"
+    feed = f'<div id="feed" class="{cards_class}">{"".join(post_card(p) for p in posts)}</div>'
     sentinel = '<div id="more" class="muted" style="text-align:center;padding:1.6rem">loading…</div>'
     done = "true" if len(posts) < _PAGE else "false"
     js = (
@@ -682,7 +703,7 @@ def ui_feed(parent: str = "", offset: int = 0, partial: int = 0, con=Depends(get
         "if(n<" + str(_PAGE) + "){done=true;more.remove();}"
         "});});io.observe(more);})();</script>"
     )
-    return page("Feed", banner + legend(groups, active) + note + feed + sentinel + js)
+    return _respond(banner + legend(groups, active) + note + feed + sentinel + js)
 
 
 @ui_router.get("/ui/categories/{category_id}")

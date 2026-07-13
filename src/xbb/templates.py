@@ -109,6 +109,14 @@ _STYLE = """
   .cards { display: flex; align-items: flex-start; gap: .85rem; flex-wrap: wrap; }
   .masonry-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: .85rem; }
   .cards > .post { flex: 1 1 320px; margin: 0; }  /* brief pre-JS fallback before columns form */
+  /* list view (feed toggle): one wide card per row, timeline-style; masonry JS skips these */
+  .cards.list { display: block; max-width: 640px; }
+  .cards.list > .post { width: 100%; margin: 0 0 .85rem; }
+  .view-toggle { float: right; font-size: .82rem; }
+  .view-toggle a { color: var(--muted); text-decoration: none; padding: .25rem .6rem;
+                   border: 1px solid var(--line-2); border-radius: 8px; margin-left: .35rem; }
+  .view-toggle a.on { color: var(--accent-ink); background: var(--accent-soft);
+                      border-color: var(--accent-soft); font-weight: 600; }
   h1 { font-family: var(--display); font-size: 1.7rem; font-weight: 700; letter-spacing: -.025em;
        margin: 0 0 1.1rem; }
   h3 { font-family: var(--display); margin: 1.4rem 0 .5rem; font-size: 1.02rem; font-weight: 600; }
@@ -319,8 +327,11 @@ _MASONRY_JS = (
     "function build(c){var cards=ordered(c),want=nCols(c);"
     "c.innerHTML='';for(var i=0;i<want;i++){var d=document.createElement('div');d.className='masonry-col';c.appendChild(d);}"
     "cards.forEach(function(card){shortest(c).appendChild(card);});}"
-    "function layout(){document.querySelectorAll('.cards').forEach(build);}"
-    "window.__masonryAdd=function(c,html){if(!c.querySelector('.masonry-col'))build(c);"
+    "function layout(){document.querySelectorAll('.cards:not(.list)').forEach(build);}"
+    "window.__masonryAdd=function(c,html){"
+    "if(c.classList.contains('list')){c.insertAdjacentHTML('beforeend',html);"
+    "if(window.__clampCards)__clampCards(c);return;}"
+    "if(!c.querySelector('.masonry-col'))build(c);"
     "var mx=0;c.querySelectorAll('.post').forEach(function(x){var o=x.getAttribute('data-ord');if(o!==null)mx=Math.max(mx,+o+1);});"
     "var t=document.createElement('div');t.innerHTML=html;"
     "Array.prototype.slice.call(t.querySelectorAll('.post')).forEach(function(card){"
