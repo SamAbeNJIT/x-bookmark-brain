@@ -62,6 +62,39 @@ def index_posts(
     return done
 
 
+def posts_by_ids(con: psycopg.Connection, ids: list[str]) -> list[dict[str, Any]]:
+    """Hydrate posts by id, in the given order — same card shape `search` returns (minus score).
+
+    Used by the Ask UI to re-render earlier turns' source bookmarks: the thread state lives
+    client-side (hidden form field carries only the ids), so each stateless re-render fetches
+    the cards fresh. Unknown ids are silently dropped."""
+    if not ids:
+        return []
+    rows = con.execute(
+        """
+        SELECT p.id, p.url, p.text, a.handle, a.avatar_url, p.media_json, c.parent
+        FROM posts p
+        LEFT JOIN authors a ON a.tenant_id = p.tenant_id AND a.id = p.author_id
+        LEFT JOIN LATERAL (
+            SELECT category_id AS cid
+            FROM assignments
+            WHERE tenant_id = p.tenant_id AND post_id = p.id
+            ORDER BY category_id
+            LIMIT 1
+        ) pa ON true
+        LEFT JOIN categories c ON c.id = pa.cid
+        WHERE p.id = ANY(%s)
+        """,
+        (ids,),
+    ).fetchall()
+    by_id = {
+        r[0]: {"id": r[0], "url": r[1], "text": r[2], "handle": r[3], "avatar_url": r[4],
+               "media_json": r[5], "parent": r[6]}
+        for r in rows
+    }
+    return [by_id[i] for i in ids if i in by_id]
+
+
 def search(con: psycopg.Connection, ai: AIClient, query: str, k: int = 10) -> list[dict[str, Any]]:
     """Hybrid retrieval: semantic (pgvector HNSW) + lexical (Postgres FTS), fused with RRF.
 
