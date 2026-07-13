@@ -110,7 +110,7 @@ _STYLE = """
   .masonry-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: .85rem; }
   .cards > .post { flex: 1 1 320px; margin: 0; }  /* brief pre-JS fallback before columns form */
   /* list view (feed toggle): one wide card per row, timeline-style; masonry JS skips these */
-  .cards.list { display: block; max-width: 640px; }
+  .cards.list { display: block; max-width: 860px; }
   .cards.list > .post { width: 100%; margin: 0 0 .85rem; }
   .view-toggle { float: right; font-size: .82rem; }
   .view-toggle a { color: var(--muted); text-decoration: none; padding: .25rem .6rem;
