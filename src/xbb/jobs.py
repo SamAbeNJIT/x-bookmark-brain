@@ -73,6 +73,14 @@ def _run(cfg: Config, tenant_id: str) -> None:
         _set(tenant_id, added=added)
         logger.info("sync.backfill tenant=%s added=%d cap=%s", tenant_id, added, cap)
 
+        if con.execute("SELECT COUNT(*) FROM posts").fetchone()[0] == 0:
+            # Brand-new X accounts can have ZERO bookmarks — nothing to embed or categorize.
+            # A friendly done-state beats a stack trace (two live signups hit this 2026-07-13).
+            _set(tenant_id, step="done",
+                 detail="no bookmarks found on your X account yet — save a few on X, then sync again")
+            logger.info("sync.done tenant=%s added=0 empty_library=true", tenant_id)
+            return
+
         ai = BedrockAIClient(
             region=cfg.aws_region,
             embedding_model=cfg.bedrock_embedding_model,

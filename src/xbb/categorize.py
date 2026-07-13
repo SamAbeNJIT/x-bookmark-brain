@@ -24,6 +24,11 @@ def derive_taxonomy(con: psycopg.Connection, ai: AIClient, sample_size: int = 50
     texts = [r[0] for r in con.execute(
         "SELECT text FROM posts WHERE text IS NOT NULL ORDER BY random() LIMIT %s", (sample_size,)
     )]
+    if not texts:
+        # Empty/image-only library: asking the model to derive categories from NOTHING makes
+        # it reply in confused prose ("please share the posts…"), which crashed syncs for
+        # zero-bookmark signups (live, 2026-07-13). No sample -> no taxonomy, not an error.
+        return []
     return ai.derive_taxonomy(texts)
 
 

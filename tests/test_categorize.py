@@ -136,6 +136,22 @@ def test_confident_retry_rescues_weak_batch_label(seeded_db):
         con.close()
 
 
+def test_derive_taxonomy_empty_corpus_returns_empty_without_ai_call(db):
+    """Zero-bookmark libraries must not reach the model (live crash, 2026-07-13: the model
+    replies in prose to an empty sample and the JSON parse kills the sync)."""
+    class _NeverCalled:
+        def derive_taxonomy(self, samples):
+            raise AssertionError("model must not be called with an empty sample")
+
+    con = connect(db)
+    try:
+        assert categorize.derive_taxonomy(con, _NeverCalled()) == []
+        categorize.save_taxonomy(con, [])  # no-op, no crash
+        assert categorize.get_taxonomy(con) == []
+    finally:
+        con.close()
+
+
 def test_derive_parents_groups_unparented_categories(db, fake_ai):
     """New tenants' AI-derived category names never match DEFAULT_PARENTS — derive_parents
     must group them so the tree doesn't collapse into one giant 'Other'."""
