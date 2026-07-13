@@ -15,7 +15,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, authui, billing, categorize, credits, legal, mail, pricing, storage
+from . import auth, authui, billing, categorize, credits, jobs, legal, mail, pricing, storage
 from .config import Config
 from .deps import SESSION_COOKIE, get_ai, get_db, resolve_tenant
 from .log import logger
@@ -87,6 +87,14 @@ def _apply_payment_event(con, event: dict) -> bool:
             storage.set_import_payment(con, account_id, obj.get("payment_intent"), paid)
             logger.info("billing.import_paid tenant=%s count=%d paid=%.2f", account_id, count, paid)
             _purchase_alert(f"{buyer} bought an import of up to {count:,} bookmarks (${paid:.2f})")
+            # Fulfillment starts NOW, not when the customer finds the Sync button (first
+            # buyer waited 43 minutes, nearly paid twice, and emailed support). Best-effort:
+            # a job hiccup must never 500 the webhook (Stripe would retry the payment event).
+            try:
+                jobs.start(account_id)
+                logger.info("sync.autostart reason=import_paid tenant=%s", account_id)
+            except Exception:
+                logger.exception("sync.autostart_failed tenant=%s", account_id)
     elif account_id and kind == "ingestion":  # legacy fixed-price full unlock
         storage.set_ingestion_paid(con, account_id, True)
         _purchase_alert(f"{buyer} bought the full-import unlock (${paid:.2f})")
@@ -367,8 +375,10 @@ def create_app() -> FastAPI:
 
     @app.get("/billing/success")
     def billing_success_route():
-        return page("Billing", '<div class="answer">🎉 Thanks! Your purchase is being applied — '
-                    "your balance / import status updates here in a moment.</div>"
+        return page("Billing", '<div class="answer">🎉 Thanks! Your purchase is being applied. '
+                    "If you bought an import, <b>your library is importing right now</b> — watch "
+                    'progress on the <a href="/ui/refresh">Sync page</a>. Have fewer bookmarks '
+                    "than you bought? The difference refunds to your card automatically.</div>"
                     '<p><a href="/ui/billing">Back to billing</a></p>')
 
     @app.post("/billing/webhook")

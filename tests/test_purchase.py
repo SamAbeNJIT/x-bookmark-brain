@@ -47,6 +47,25 @@ def test_ingestion_payment_marks_paid(client, db):
         con.close()
 
 
+def test_import_payment_autostarts_sync(client, db, monkeypatch):
+    """Fulfillment begins at the webhook, not at a manual Sync press (first buyer waited
+    43 minutes and nearly paid twice)."""
+    from xbb import jobs
+    started = []
+    monkeypatch.setattr(jobs, "start", lambda tid=None: started.append(tid) or True)
+    secret = _secret()
+    ev = _session_event(mode="payment", client_reference_id=DEFAULT_TENANT_ID,
+                        amount_total=900, payment_intent="pi_test",
+                        metadata={"kind": "import", "count": "1000"})
+    assert _post_event(client, ev, secret).status_code == 200
+    assert started == [DEFAULT_TENANT_ID]
+    con = storage.connect(db)
+    try:
+        assert storage.import_limit(con) >= 1000  # entitlement raised before the sync starts
+    finally:
+        con.close()
+
+
 def test_credit_payment_adds_balance(client, db):
     secret = _secret()
     con = storage.connect(db)
