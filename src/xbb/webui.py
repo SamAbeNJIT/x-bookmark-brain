@@ -352,7 +352,9 @@ def _ask_form(question: str, autofocus: bool = True, history: list | None = None
         f'<input type=hidden name=sources value="{esc(json.dumps(sources))}">' if sources else ""
     )
     new_convo = (
-        '<a href="/ui/ask" class=muted style="font-size:.82rem">↺ new conversation</a>'
+        '<a href="/ui/ask" class=muted style="font-size:.82rem" '
+        "onclick=\"try{localStorage.removeItem('xbb_thread')}catch(e){}\">"
+        "↺ new conversation</a>"
         if in_thread else ""
     )
     return (
@@ -460,10 +462,51 @@ def _cited_card(p: dict, cited: set[str], refno: dict[str, int],
     return html
 
 
+# Restore the most recent conversation from localStorage when the user navigates back to Ask
+# (owner request: switch to Feed and back, the thread is still there). Client-held, like the
+# thread itself: bubbles rebuilt with textContent (no HTML injection from stored content),
+# hidden history/sources fields re-attached so the next question continues the conversation.
+_RESTORE_JS = (
+    "<script>(function(){try{"
+    "var d=JSON.parse(localStorage.getItem('xbb_thread')||'null');"
+    "if(!d||!d.h||!d.h.length)return;"
+    "var f=document.getElementById('askform');if(!f)return;"
+    "function inp(n,v){var i=document.createElement('input');i.type='hidden';i.name=n;"
+    "i.value=JSON.stringify(v);f.appendChild(i);}"
+    "inp('history',d.h);if(d.s&&d.s.length)inp('sources',d.s);"
+    "var th=document.createElement('div');th.className='thread';"
+    "d.h.forEach(function(t){var e=document.createElement('div');e.className='answer';"
+    "if(t.role==='user'){e.style.cssText='background:var(--accent-soft);color:var(--accent-ink);"
+    "border-radius:12px;padding:.7rem 1rem;margin:1.6rem 0 .5rem;font-weight:600';"
+    "e.textContent=t.content;}else{String(t.content).split('\\n').forEach(function(ln,i){"
+    "if(i)e.appendChild(document.createElement('br'));"
+    "e.appendChild(document.createTextNode(ln));});}th.appendChild(e);});"
+    "var bar=document.createElement('p');bar.style.cssText='margin:.4rem 0';"
+    "var a=document.createElement('a');a.href='/ui/ask';a.textContent='↺ New chat';"
+    "a.className='muted';a.style.fontSize='.82rem';"
+    "a.onclick=function(){try{localStorage.removeItem('xbb_thread')}catch(e){}};"
+    "bar.appendChild(a);"
+    "f.parentNode.insertBefore(th,f);f.parentNode.insertBefore(bar,f);"
+    "var ta=f.querySelector('textarea');if(ta){ta.placeholder='Ask a follow-up…';ta.rows=2;}"
+    "var b=document.getElementById('askbtn');if(b)b.textContent='Send';"
+    "window.scrollTo(0,document.body.scrollHeight);"
+    "}catch(e){}})();</script>"
+)
+
+
+def _save_thread_js(turns: list, groups: list) -> str:
+    """Persist the finished exchange client-side so navigating away and back restores it."""
+    payload = json.dumps({"h": turns, "s": groups}).replace("</", "<\\/")
+    return (f"<script>try{{localStorage.setItem('xbb_thread',"
+            f"JSON.stringify({payload}))}}catch(e){{}}</script>")
+
+
 @ui_router.get("/ui/ask")
 def ui_ask(question: str = "", con=Depends(get_db), ai=Depends(get_ai)):
     banner = _capped_banner(con, Config.from_env(), "banner_ask")
-    return page("Ask", banner + _ask_form(question))
+    # A prefilled question (?question=...) means a fresh intent — skip the restore.
+    restore = _RESTORE_JS if not question else ""
+    return page("Ask", banner + _ask_form(question) + restore)
 
 
 @ui_router.post("/ui/ask")
@@ -513,7 +556,9 @@ def ui_ask_post(request: Request, question: str = Form(...), history: str = Form
                          {"role": "assistant", "content": ans_text}]
     groups = merge_sources(prior_sources, question,
                            [str(p["id"]) for p in retrieved], result["citations"])
-    form = _ask_form("", autofocus=False, history=trim_history(new_turns), sources=groups)
+    kept_turns = trim_history(new_turns)
+    form = _ask_form("", autofocus=False, history=kept_turns, sources=groups)
+    save_js = _save_thread_js(kept_turns, groups)
 
     cited_str = {str(c) for c in cited}
     cards = "".join(_cited_card(p, cited_str, refno, ans_text) for p in retrieved)
@@ -569,8 +614,8 @@ def ui_ask_post(request: Request, question: str = Form(...), history: str = Form
             "if(_pad>0)_as.style.paddingBottom=_pad+'px';"
             "_as.scrollTop=Math.max(0,_aq.offsetTop-6);}</script>"
         )
-        return page("Ask", body, wide=True, rail=True)
-    return page("Ask", thread + latest_q + answer + form)
+        return page("Ask", body + save_js, wide=True, rail=True)
+    return page("Ask", thread + latest_q + answer + form + save_js)
 
 
 @ui_router.get("/ui/feedback")

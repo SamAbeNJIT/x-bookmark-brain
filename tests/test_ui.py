@@ -60,6 +60,19 @@ def test_pageviews_are_logged_server_side(client):
         xbb_logger.removeHandler(h)
 
 
+def test_ask_thread_persists_via_localstorage(client):
+    """The POST response saves the thread client-side; the GET page carries the restore
+    script; the new-conversation link clears the stored thread."""
+    client.post("/index")
+    r = client.post("/ui/ask", data={"question": "rag evaluation"})
+    assert "localStorage.setItem('xbb_thread'" in r.text          # save after each answer
+    assert "localStorage.removeItem('xbb_thread')" in r.text      # new-conversation clears
+    r = client.get("/ui/ask")
+    assert "localStorage.getItem('xbb_thread'" in r.text          # restore on return
+    r = client.get("/ui/ask", params={"question": "prefilled"})
+    assert "localStorage.getItem('xbb_thread'" not in r.text      # fresh intent skips restore
+
+
 def test_feed_view_toggle_grid_list_and_cookie(client, seeded_db, fake_ai):
     from xbb import categorize
     from xbb.storage import connect
