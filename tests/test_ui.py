@@ -69,8 +69,28 @@ def test_ask_thread_persists_via_localstorage(client):
     assert "localStorage.removeItem('xbb_thread')" in r.text      # new-conversation clears
     r = client.get("/ui/ask")
     assert "localStorage.getItem('xbb_thread'" in r.text          # restore on return
+    assert "/ui/ask/restore" in r.text                            # via the server-render route
     r = client.get("/ui/ask", params={"question": "prefilled"})
     assert "localStorage.getItem('xbb_thread'" not in r.text      # fresh intent skips restore
+
+
+def test_ask_restore_renders_thread_and_side_sources(client):
+    """The restored view must include the sources pane (side tweets vanished in the first,
+    client-only restore — owner bug report)."""
+    import json as _json
+    client.post("/index")
+    hist = [{"role": "user", "content": "rag evaluation"},
+            {"role": "assistant", "content": "You saved a post about RAG evaluation."}]
+    srcs = [{"q": "rag evaluation", "ids": ["1001"], "cited": ["1001"]}]
+    r = client.post("/ui/ask/restore",
+                    data={"history": _json.dumps(hist), "sources": _json.dumps(srcs)})
+    assert r.status_code == 200
+    assert "You saved a post about RAG evaluation." in r.text     # thread restored
+    assert "from: “rag evaluation”" in r.text                     # sources pane restored
+    assert "ask-right" in r.text and "★ cited" in r.text          # cards, with badges
+    # Degenerate stored state doesn't loop: empty history redirects to a restore-skipping URL.
+    r = client.post("/ui/ask/restore", data={"history": "[]"}, follow_redirects=False)
+    assert r.status_code == 303 and "question=" in r.headers["location"]
 
 
 def test_feed_view_toggle_grid_list_and_cookie(client, seeded_db, fake_ai):

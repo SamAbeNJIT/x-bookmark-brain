@@ -352,9 +352,11 @@ def _ask_form(question: str, autofocus: bool = True, history: list | None = None
         f'<input type=hidden name=sources value="{esc(json.dumps(sources))}">' if sources else ""
     )
     new_convo = (
-        '<a href="/ui/ask" class=muted style="font-size:.82rem" '
+        '<a href="/ui/ask" style="font-size:.85rem;font-weight:600;text-decoration:none;'
+        "color:var(--accent-ink);padding:.3rem .7rem;border:1px solid var(--line-2);"
+        'border-radius:8px" '
         "onclick=\"try{localStorage.removeItem('xbb_thread')}catch(e){}\">"
-        "↺ new conversation</a>"
+        "↺ New chat</a>"
         if in_thread else ""
     )
     return (
@@ -463,34 +465,43 @@ def _cited_card(p: dict, cited: set[str], refno: dict[str, int],
 
 
 # Restore the most recent conversation from localStorage when the user navigates back to Ask
-# (owner request: switch to Feed and back, the thread is still there). Client-held, like the
-# thread itself: bubbles rebuilt with textContent (no HTML injection from stored content),
-# hidden history/sources fields re-attached so the next question continues the conversation.
+# (owner request: switch to Feed and back, the thread is still there). The stored state is
+# auto-POSTed to /ui/ask/restore so the SERVER renders the full chat layout — thread bubbles
+# AND the sources pane (side tweets need server-rendered cards; a client-side rebuild dropped
+# them — owner bug report 2026-07-13).
 _RESTORE_JS = (
     "<script>(function(){try{"
     "var d=JSON.parse(localStorage.getItem('xbb_thread')||'null');"
     "if(!d||!d.h||!d.h.length)return;"
-    "var f=document.getElementById('askform');if(!f)return;"
+    "var f=document.createElement('form');f.method='post';f.action='/ui/ask/restore';"
     "function inp(n,v){var i=document.createElement('input');i.type='hidden';i.name=n;"
     "i.value=JSON.stringify(v);f.appendChild(i);}"
     "inp('history',d.h);if(d.s&&d.s.length)inp('sources',d.s);"
-    "var th=document.createElement('div');th.className='thread';"
-    "d.h.forEach(function(t){var e=document.createElement('div');e.className='answer';"
-    "if(t.role==='user'){e.style.cssText='background:var(--accent-soft);color:var(--accent-ink);"
-    "border-radius:12px;padding:.7rem 1rem;margin:1.6rem 0 .5rem;font-weight:600';"
-    "e.textContent=t.content;}else{String(t.content).split('\\n').forEach(function(ln,i){"
-    "if(i)e.appendChild(document.createElement('br'));"
-    "e.appendChild(document.createTextNode(ln));});}th.appendChild(e);});"
-    "var bar=document.createElement('p');bar.style.cssText='margin:.4rem 0';"
-    "var a=document.createElement('a');a.href='/ui/ask';a.textContent='↺ New chat';"
-    "a.className='muted';a.style.fontSize='.82rem';"
-    "a.onclick=function(){try{localStorage.removeItem('xbb_thread')}catch(e){}};"
-    "bar.appendChild(a);"
-    "f.parentNode.insertBefore(th,f);f.parentNode.insertBefore(bar,f);"
-    "var ta=f.querySelector('textarea');if(ta){ta.placeholder='Ask a follow-up…';ta.rows=2;}"
-    "var b=document.getElementById('askbtn');if(b)b.textContent='Send';"
-    "window.scrollTo(0,document.body.scrollHeight);"
+    "document.body.appendChild(f);f.submit();"
     "}catch(e){}})();</script>"
+)
+
+def _new_chat_btn() -> str:
+    """Prominent New-chat control at the top of a conversation view (owner: the composer's
+    link alone was too easy to miss). Clears the stored thread and starts fresh."""
+    return ('<div class="view-toggle" style="margin-bottom:.5rem">'
+            '<a href="/ui/ask" class="on" '
+            "onclick=\"try{localStorage.removeItem('xbb_thread')}catch(e){}\">"
+            "↺ New chat</a></div>")
+
+
+# Snap the thread pane so the newest question sits at the top with its answer below (shared
+# by the live-answer render and the restored-conversation render).
+_SNAP_JS = (
+    "<script>var _ac=document.querySelector('.ask-cols');"
+    "if(_ac)window.scrollTo(0,_ac.getBoundingClientRect().top+window.pageYOffset-10);"
+    "var _aq=document.getElementById('latestq'),"
+    "_as=document.getElementById('askscroll');"
+    "if(_aq&&_as){var _lc=_as.lastElementChild,"
+    "_bot=_lc.offsetTop+_lc.offsetHeight+16,"
+    "_pad=_aq.offsetTop-6+_as.clientHeight-_bot;"
+    "if(_pad>0)_as.style.paddingBottom=_pad+'px';"
+    "_as.scrollTop=Math.max(0,_aq.offsetTop-6);}</script>"
 )
 
 
@@ -592,30 +603,69 @@ def ui_ask_post(request: Request, question: str = Form(...), history: str = Form
         # Two-pane chat: the thread scrolls in its own column with the composer docked at
         # the bottom; on load, snap the scroll so the newest question sits at the top.
         body = (
-            '<div class="ask-cols">'
+            _new_chat_btn()
+            + '<div class="ask-cols">'
             '<div class="ask-left">'
             f'<div class="ask-scroll" id="askscroll">{thread}{latest_q}{answer}</div>'
             f'<div class="ask-composer">{form}</div>'
             "</div>"
             f'<div class="ask-right">{"".join(right)}</div>'
             "</div>"
-            # Snap: page down to the columns (the sticky pane is viewport-sized once there),
-            # then the thread scroll to the newest question, answer below it. Pad the scroll
-            # bottom first so a short thread can still put the question at the top.
-            "<script>var _ac=document.querySelector('.ask-cols');"
-            "if(_ac)window.scrollTo(0,_ac.getBoundingClientRect().top+window.pageYOffset-10);"
-            "var _aq=document.getElementById('latestq'),"
-            "_as=document.getElementById('askscroll');"
-            # (content bottom, not scrollHeight: for a short thread scrollHeight reports the
-            # pane height, which under-computes the padding by exactly the empty gap)
-            "if(_aq&&_as){var _lc=_as.lastElementChild,"
-            "_bot=_lc.offsetTop+_lc.offsetHeight+16,"
-            "_pad=_aq.offsetTop-6+_as.clientHeight-_bot;"
-            "if(_pad>0)_as.style.paddingBottom=_pad+'px';"
-            "_as.scrollTop=Math.max(0,_aq.offsetTop-6);}</script>"
+            + _SNAP_JS
         )
         return page("Ask", body + save_js, wide=True, rail=True)
-    return page("Ask", thread + latest_q + answer + form + save_js)
+    return page("Ask", _new_chat_btn() + thread + latest_q + answer + form + save_js)
+
+
+@ui_router.post("/ui/ask/restore")
+def ui_ask_restore(request: Request, history: str = Form(""), sources: str = Form(""),
+                   con=Depends(get_db)):
+    """Re-render a locally-stored conversation server-side — full chat layout including the
+    sources pane (cards must be server-rendered from ids). No AI call, no billing: this only
+    redraws what the user already paid for. Same trust model as the ask fields: everything
+    is validated and bounded by trim_history/trim_sources."""
+    try:
+        turns = trim_history(json.loads(history)) if history else []
+    except (json.JSONDecodeError, TypeError):
+        turns = []
+    try:
+        groups = trim_sources(json.loads(sources)) if sources else []
+    except (json.JSONDecodeError, TypeError):
+        groups = []
+    if not turns:
+        return RedirectResponse("/ui/ask?question=+", status_code=303)  # nothing to restore
+    form = _ask_form("", autofocus=False, history=turns, sources=groups or None)
+    # Last exchange gets the anchor treatment; earlier turns render as the compact thread.
+    if len(turns) >= 2 and turns[-2]["role"] == "user" and turns[-1]["role"] == "assistant":
+        thread = _thread_html(turns[:-2])
+        latest_q = _question_card(turns[-2]["content"], anchor=True)
+        answer = f'<div class="answer">{md_lite(turns[-1]["content"])}</div>'
+    else:
+        thread, latest_q, answer = _thread_html(turns), "", ""
+    all_posts = {p["id"]: p for p in
+                 posts_by_ids(con, [i for g in groups for i in g["ids"]])}
+    right = []
+    for g in groups:
+        posts = [all_posts[i] for i in g["ids"] if i in all_posts]
+        if not posts:
+            continue
+        grefno = {pid: n + 1 for n, pid in enumerate(g["cited"])}
+        gcards = "".join(_cited_card(p, set(g["cited"]), grefno) for p in posts)
+        right.append(f'<h3 class="src-group">from: “{esc(g["q"][:120])}”</h3>'
+                     f'<div class="cards">{gcards}</div>')
+    if right:
+        body = (
+            _new_chat_btn()
+            + '<div class="ask-cols">'
+            '<div class="ask-left">'
+            f'<div class="ask-scroll" id="askscroll">{thread}{latest_q}{answer}</div>'
+            f'<div class="ask-composer">{form}</div>'
+            "</div>"
+            f'<div class="ask-right">{"".join(right)}</div>'
+            "</div>" + _SNAP_JS
+        )
+        return page("Ask", body, wide=True, rail=True)
+    return page("Ask", _new_chat_btn() + thread + latest_q + answer + form)
 
 
 @ui_router.get("/ui/feedback")
