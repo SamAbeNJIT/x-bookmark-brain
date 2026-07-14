@@ -24,6 +24,9 @@ a question (sent to Amazon Bedrock) — never your library in bulk.
 - **Color-coded browse** — a two-level category tree and a tinted, masonry **Feed** with a
   clickable legend to filter to one topic. Cards show author avatars and inline tweet media.
 - **In-app Sync** — a button that pulls + embeds + labels anything new, in the background.
+- **Browser bookmark import** — upload a Chrome/Firefox "Export bookmarks" HTML file and
+  your web bookmarks join the library too (free): embedded, auto-labeled, and searchable
+  alongside your X saves, with folder names kept as labeling context.
 
 AI runs on **Amazon Bedrock**: Titan Text Embeddings for vectors, a cheap Claude (Haiku) for
 bulk labeling, and a stronger Claude (Sonnet) for taxonomy derivation and answers.

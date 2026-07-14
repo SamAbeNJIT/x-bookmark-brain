@@ -277,7 +277,7 @@ def create_app() -> FastAPI:
         if cap is None:
             body += "<p class=muted>✓ Full bookmark history unlocked.</p>"
         else:
-            n = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+            n = storage.post_count(con, "x")  # the slider buys X imports; browser ones are free
             remaining = max(cap - n, 0)
             purchased_n = cap - cfg.free_bookmark_limit
             body += (

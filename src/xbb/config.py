@@ -56,6 +56,9 @@ class Config:
     # Free tier: bookmarks importable before paying (one-time slice) + free asks per day.
     free_bookmark_limit: int
     free_asks_per_day: int
+    # Browser-bookmark uploads are free (no X API cost — just pennies of embedding/labeling);
+    # this caps how many a single account may import.
+    free_web_bookmark_limit: int
 
     # Import slider: price per bookmark of purchased entitlement (first free_bookmark_limit free).
     price_per_bookmark_usd: float
@@ -103,6 +106,7 @@ class Config:
             ask_price_usd=float(os.getenv("ASK_PRICE_USD", "0.05")),  # 2026-07-10 pivot: 10¢ -> 5¢
             ingestion_price_usd=float(os.getenv("INGESTION_PRICE_USD", "9.99")),
             free_bookmark_limit=int(os.getenv("FREE_BOOKMARK_LIMIT", "100")),
+            free_web_bookmark_limit=int(os.getenv("FREE_WEB_BOOKMARK_LIMIT", "5000")),
             free_asks_per_day=int(os.getenv("FREE_ASKS_PER_DAY", "5")),
             price_per_bookmark_usd=float(os.getenv("PRICE_PER_BOOKMARK_USD", "0.01")),
             stripe_credit_sub_price_id=os.getenv("STRIPE_CREDIT_SUB_PRICE_ID"),
