@@ -34,6 +34,13 @@ def test_import_page_renders(client):
 
 
 def test_upload_stores_browser_posts_and_starts_enrich(client, seeded_db, no_enrich):
+    # Give the seeded X posts real ranks first (prod backfill always assigns bm_rank; the
+    # JSON fixtures leave it NULL, and NULLs sort FIRST under ORDER BY ... DESC, which would
+    # fake out the interleaving assertion below).
+    con = storage.connect(seeded_db)
+    con.execute("UPDATE posts SET bm_rank = 10 WHERE bm_rank IS NULL")
+    con.commit()
+    con.close()
     r = _upload(client)
     assert r.status_code == 303 and r.headers["location"] == "/ui/refresh"
     assert no_enrich == [4]  # chrome fixture: 4 importable links

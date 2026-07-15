@@ -130,6 +130,12 @@ def _point_at_test_db(monkeypatch):
     monkeypatch.delenv("KMS_KEY_ID", raising=False)
     monkeypatch.delenv("SES_SENDER", raising=False)
     monkeypatch.delenv("OWNER_ALERT_EMAIL", raising=False)  # alerts print, never email, in tests
+    # Never fire real X ad-conversion events from the suite: with the live X_ADS_* keys in
+    # .env, xconv would otherwise be "configured" and every account-creation test would spawn
+    # real API attempts. Tests that need a configured tracker set these explicitly.
+    for var in ("X_ADS_PIXEL_ID", "X_ADS_EVENT_ID", "X_ADS_CONSUMER_KEY",
+                "X_ADS_CONSUMER_SECRET", "X_ADS_ACCESS_TOKEN", "X_ADS_ACCESS_SECRET"):
+        monkeypatch.delenv(var, raising=False)
     yield
 
 
