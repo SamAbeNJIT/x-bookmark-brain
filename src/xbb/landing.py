@@ -67,6 +67,8 @@ footer a { color:inherit; }
 
 
 def landing_page() -> HTMLResponse:
+    from .config import Config
+    free = Config.from_env().free_bookmark_limit
     html = f"""<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content='width=device-width, initial-scale=1'>
 <title>x-bookmarks.ai: find any X bookmark in seconds</title>
@@ -76,18 +78,18 @@ def landing_page() -> HTMLResponse:
 <meta property="og:url" content="https://x-bookmarks.ai/">
 <meta property="og:site_name" content="x-bookmarks.ai">
 <meta property="og:title" content="Find any X bookmark in seconds">
-<meta property="og:description" content="Turn your X bookmarks into searchable knowledge. Sign in with X, your last 100 organize themselves, free.">
+<meta property="og:description" content="Turn your X bookmarks into searchable knowledge. Sign in with X, your free slice organizes itself.">
 <meta property="og:image" content="https://x-bookmarks.ai/static/feed.png">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Find any X bookmark in seconds">
-<meta name="twitter:description" content="Turn your X bookmarks into searchable knowledge. Sign in with X, your last 100 organize themselves, free.">
+<meta name="twitter:description" content="Turn your X bookmarks into searchable knowledge. Sign in with X, your free slice organizes itself.">
 <meta name="twitter:image" content="https://x-bookmarks.ai/static/feed.png">
 <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <script type="application/ld+json">{{"@context":"https://schema.org","@type":"SoftwareApplication",
 "name":"x-bookmarks.ai","applicationCategory":"UtilitiesApplication","operatingSystem":"Web",
 "url":"https://x-bookmarks.ai/","description":"AI search and organization for your X (Twitter) bookmarks: import your saved posts, get them sorted into your own topics, search by meaning, and ask questions with cited answers.",
-"offers":{{"@type":"Offer","price":"0","priceCurrency":"USD","description":"Free: 100 most recent bookmarks and 5 questions a day"}}}}</script>
+"offers":{{"@type":"Offer","price":"0","priceCurrency":"USD","description":"Free: your {free} most recent bookmarks and 5 questions a day"}}}}</script>
 <style>{_CSS}</style></head><body>
 <div class=wrap>
 <nav><span class=brand>bookmark<span class=dot>.</span>brain</span>
@@ -99,7 +101,7 @@ def landing_page() -> HTMLResponse:
   x-bookmarks.ai turns your X bookmarks into searchable knowledge: find any saved post in
   seconds, or ask a question and get an answer built from what <b>you</b> saved.</p>
   <a class=cta href="/oauth/signin"><span class=x>𝕏</span>Sign in with X, free</a>
-  <div class=freeline><b>Free forever:</b> your last 100 bookmarks organized + 5 AI questions a
+  <div class=freeline><b>Free forever:</b> your last {free} bookmarks organized + 5 AI questions a
   day. No card, nothing to set up. You're searching your bookmarks in minutes.</div>
   <div class=freeline style="margin-top:.35rem">🔒 Read-only bookmark access via X's official
   sign-in. We never post, follow, or touch anything else, and only you can see your library.</div>
@@ -143,7 +145,7 @@ def landing_page() -> HTMLResponse:
     <div class=step><span class=n>1</span><b>Sign in with X</b>One tap, official X sign-in.
     Read-only bookmark access. Revoke anytime from your X settings.</div>
     <div class=step><span class=n>2</span><b>Your bookmarks organize themselves</b>Your last
-    100 sync automatically and land in your own topics, free, no card.</div>
+    {free} sync automatically and land in your own topics, free, no card.</div>
     <div class=step><span class=n>3</span><b>Search, browse, ask</b>Find that post you half
     remember, or ask questions and get cited answers.</div>
   </div>
@@ -159,7 +161,7 @@ def landing_page() -> HTMLResponse:
   <h2 class=center>Free to try. Pay only if you want more.</h2>
   <div class=pricing>
     <div class="price hot"><div class=amt>Free</div><div class=per>forever, no card</div>
-      <ul><li>Your 100 most recent bookmarks, organized</li><li>5 AI questions every day</li>
+      <ul><li>Your {free} most recent bookmarks, organized</li><li>5 AI questions every day</li>
       <li>Full search &amp; browsing</li></ul></div>
     <div class=price><div class=amt>1¢</div><div class=per>per import, one-time</div>
       <ul><li>Unlock your <b>entire</b> history, from $5</li>

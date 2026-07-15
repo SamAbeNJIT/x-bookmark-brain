@@ -160,12 +160,15 @@ class XApiClient:
     def me_id(self) -> str:
         return self._get("/users/me")["data"]["id"]
 
-    def iter_bookmark_pages(self) -> Iterator[dict[str, Any]]:
-        """Yield raw v2 pages ({data, includes, meta}), newest-bookmarked first."""
+    def iter_bookmark_pages(self, max_results: int = 100) -> Iterator[dict[str, Any]]:
+        """Yield raw v2 pages ({data, includes, meta}), newest-bookmarked first.
+        `max_results` shrinks the page for capped fetches — X bills per post RETURNED, so a
+        25-post free sync must not request a 100-post page (4x the cost for the same slice)."""
         uid = self.me_id()
         token = None
         while True:
             params = dict(_BOOKMARK_PARAMS)
+            params["max_results"] = str(max(1, min(100, max_results)))
             if token:
                 params["pagination_token"] = token
             page = self._get(f"/users/{uid}/bookmarks", params)
@@ -192,7 +195,11 @@ def backfill_via_api(con, client_id: str, incremental: bool = True,
     new_ids: list[str] = []   # newly-stored ids, in fetch (newest-first) order
     seen_ids: list[str] = []  # every id seen this run, in fetch order (for full re-rank)
     capped = max_total is not None and total >= max_total
-    for page in client.iter_bookmark_pages():
+    # Capped fetches request only what fits PLUS ONE: the +1 is the cheapest possible proof
+    # that more bookmarks exist (library_more_exists → honest "you have more" upsell copy);
+    # without it an exactly-filled page is ambiguous. Uncapped fetches use full pages.
+    page_size = 100 if max_total is None else max(1, min(100, max_total - total + 1))
+    for page in client.iter_bookmark_pages(page_size):
         if capped:
             break
         users = {u["id"]: u for u in (page.get("includes") or {}).get("users", [])}

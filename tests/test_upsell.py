@@ -91,7 +91,7 @@ def test_backfill_records_more_exists_when_capped_mid_page(db, monkeypatch):
             self._pages = [{"data": [{"id": str(i), "text": f"post {i}"} for i in range(10)],
                             "includes": {}}]
 
-        def iter_bookmark_pages(self):
+        def iter_bookmark_pages(self, max_results=100):
             yield from self._pages
 
     monkeypatch.setattr(xapi, "XApiClient", _Paged)
@@ -112,7 +112,7 @@ def test_backfill_exact_page_boundary_stays_ambiguous(db, monkeypatch):
             self._pages = [{"data": [{"id": str(i), "text": f"post {i}"} for i in range(10)],
                             "includes": {}}]
 
-        def iter_bookmark_pages(self):
+        def iter_bookmark_pages(self, max_results=100):
             yield from self._pages
 
     monkeypatch.setattr(xapi, "XApiClient", _Paged)

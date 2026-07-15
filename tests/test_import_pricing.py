@@ -128,7 +128,7 @@ def test_unused_imports_roll_over_no_refund(db, monkeypatch):
             self._pages = [{"data": [{"id": f"r{i}", "text": f"post {i}"} for i in range(5)],
                             "includes": {}}]
 
-        def iter_bookmark_pages(self):
+        def iter_bookmark_pages(self, max_results=100):
             yield from self._pages
 
     monkeypatch.setattr(xapi, "XApiClient", _TinyTimeline)

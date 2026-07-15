@@ -24,7 +24,7 @@ class CursorClient:
         self.cursor = None
         self._final = final_cursor
 
-    def iter_bookmark_pages(self):
+    def iter_bookmark_pages(self, max_results=100):
         n = len(self.pages)
         for i, page in enumerate(self.pages):
             self.cursor = self._final if i == n - 1 else f"c{i}"

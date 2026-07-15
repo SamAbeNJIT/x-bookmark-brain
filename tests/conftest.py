@@ -98,7 +98,7 @@ class FakeClient:
     def __init__(self, pages):
         self._pages = pages
 
-    def iter_bookmark_pages(self):
+    def iter_bookmark_pages(self, max_results=100):
         yield from self._pages
 
 

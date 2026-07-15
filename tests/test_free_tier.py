@@ -44,10 +44,35 @@ class _FakePagedClient:
             for p in range(5)  # 50 tweets total
         ]
 
-    def iter_bookmark_pages(self):
+    def iter_bookmark_pages(self, max_results=100):
         for page in self._pages:
             _FakePagedClient.pages_served += 1
             yield page
+
+
+def test_capped_backfill_requests_small_pages(db, monkeypatch):
+    """X bills per post RETURNED: a 25-cap fetch must request 26 (cap + 1 proof-of-more
+    post), never a full 100-page (4x the spend for the same free slice)."""
+    seen_sizes = []
+
+    class _Recorder:
+        def __init__(self, con, client_id):
+            pass
+
+        def iter_bookmark_pages(self, max_results=100):
+            seen_sizes.append(max_results)
+            yield {"data": [{"id": str(i), "text": f"p{i}"} for i in range(max_results)],
+                   "includes": {}}
+
+    monkeypatch.setattr(xapi, "XApiClient", _Recorder)
+    con = storage.connect(db)
+    try:
+        xapi.backfill_via_api(con, "cid", incremental=True, max_total=25)
+        assert seen_sizes == [26]  # cap + 1, exactly one page requested
+        assert con.execute("SELECT COUNT(*) FROM posts").fetchone()[0] == 25
+        assert storage.library_more_exists(con) is True  # the +1 proved more exist
+    finally:
+        con.close()
 
 
 def test_backfill_caps_at_free_limit(db, monkeypatch):
