@@ -215,6 +215,9 @@ _MIGRATIONS = (
     "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS import_paid_usd double precision",
     # Confidence-gated labeling: store the labeler's fit score per assignment.
     "ALTER TABLE assignments ADD COLUMN IF NOT EXISTS confidence double precision",
+    # Multi-source (browser bookmark import, PR #19): tables created pre-source need the
+    # column — the PR added it to SCHEMA only, which never reaches an existing database.
+    "ALTER TABLE posts ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'x'",
 )
 
 
