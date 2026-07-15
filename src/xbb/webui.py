@@ -774,22 +774,37 @@ def ui_feedback():
         'style="width:100%;max-width:640px;padding:.8rem 1rem;font-size:1rem;font-family:inherit;'
         'border:1px solid var(--line-2);border-radius:12px;background:var(--panel);box-shadow:var(--shadow)">'
         "</textarea>"
+        '<div style="margin-top:.6rem;max-width:640px">'
+        '<input type=email name=email maxlength="254" placeholder="you@example.com (optional)" '
+        'style="width:100%;padding:.6rem .9rem;font-size:.95rem;font-family:inherit;'
+        'border:1px solid var(--line-2);border-radius:10px;background:var(--panel)">'
+        '<p class=muted style="font-size:.82rem;margin:.35rem 0 0">Want a reply? Leave your '
+        "email — or we'll DM your X account (make sure your DMs are open).</p></div>"
         '<div class=row style="margin-top:.6rem"><button>Send feedback</button></div></form>'
     )
     return page("Feedback", body)
 
 
 @ui_router.post("/ui/feedback")
-def ui_feedback_post(request: Request, message: str = Form(...), con=Depends(get_db)):
+def ui_feedback_post(request: Request, message: str = Form(...), email: str = Form(""),
+                     con=Depends(get_db)):
     from . import mail
     cfg = Config.from_env()
     tenant = resolve_tenant(request, cfg)
-    # X-sign-in accounts have no email — the @handle is the reply channel (a bare tenant
-    # uuid in the owner's inbox is useless; support request 2026-07-15).
     row = con.execute("SELECT email, x_handle FROM accounts WHERE id = %s::uuid",
                       (tenant,)).fetchone()
-    email, handle = (row or (None, None))
-    sender = email or (f"@{handle} (X, no email)" if handle else tenant)
+    acct_email, handle = (row or (None, None))
+    given = email.strip()[:254]
+    given = given if ("@" in given and "." in given.rsplit("@", 1)[-1]) else ""
+    if given and not acct_email:
+        # Volunteered reply address doubles as the account email (never overwrites).
+        if storage.set_account_email(con, tenant, given):
+            logger.info("billing.email_captured tenant=%s src=feedback", tenant)
+    # Reply channel, best first: volunteered email > account email > X DM (form warns the
+    # user their DMs must be open) > bare tenant id (email signups always have an email).
+    sender = (f"{given} (volunteered)" if given
+              else acct_email
+              or (f"@{handle} — reply via X DM" if handle else tenant))
     mail.send_owner_alert("💬 x-bookmarks feedback",
                           f"From: {sender}\n\n{message[:4000]}",
                           ses_sender=cfg.ses_sender,
