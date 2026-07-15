@@ -29,9 +29,10 @@ SUB_MONTHLY_CREDITS_USD = 7.50
 
 # Imports purchase band, in DOLLARS (owner call, 2026-07-13: "$5-$200, make it clear how many
 # imports that dollar amount accounts for"). $5 floor keeps Stripe's 30¢+2.9% fee tolerable.
-IMPORT_MIN_USD = 5.0
+IMPORT_MIN_USD = 3.0    # lowered from $5 (owner, 2026-07-15: cut first-payment friction —
+                        # two abandoned checkouts in the first 24h of the $5/$10 band)
 IMPORT_MAX_USD = 200.0
-IMPORT_STEP_USD = 5.0
+IMPORT_STEP_USD = 1.0   # $1 steps so the $3 floor is actually reachable on the slider
 
 
 def imports_for_usd(amount_usd: float, per_import_usd: float) -> int:

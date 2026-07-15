@@ -378,7 +378,7 @@ def _first_answer_card(cfg: Config, more_exists: bool, surface: str = "first_ans
         '<div class="answer" style="border-left:4px solid var(--accent);margin-top:1rem">'
         f"<b>That answer searched your newest {cfg.free_bookmark_limit} bookmarks.</b><br>"
         f"{middle}<br>"
-        "Complete your library — 1¢ per import, from $5.<br>"
+        "Complete your library — 1¢ per import, from $3.<br>"
         f'<a class="stat" style="display:inline-block;text-decoration:none;margin-top:.6rem" '
         f'href="/ui/complete-library?src={surface}">'
         '<b style="font-size:1rem">Complete my library →</b></a></div>'

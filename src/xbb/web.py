@@ -292,7 +292,7 @@ def create_app() -> FastAPI:
             if cfg.stripe_secret_key:
                 cents = int(cfg.price_per_bookmark_usd * 100)
                 per = cfg.price_per_bookmark_usd
-                default_usd = 10
+                default_usd = 5  # low-friction anchor (was 10; min is $3 — owner, 2026-07-15)
                 body += (
                     "<p><b>Buy imports</b> — each import brings one saved post into your "
                     f"library, {cents}¢ each, on top of your free {cfg.free_bookmark_limit}. "
