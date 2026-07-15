@@ -529,6 +529,17 @@ def is_ingestion_paid(con: psycopg.Connection) -> bool:
     return bool(row and row[0])
 
 
+def post_count(con: psycopg.Connection, source: str | None = None) -> int:
+    """This tenant's stored posts, optionally scoped to one source ('x' / 'browser').
+    Entitlement math MUST scope to 'x' — browser imports are free and metered separately,
+    so they must never consume or inflate the paid X slice."""
+    if source is None:
+        return con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+    return con.execute(
+        "SELECT COUNT(*) FROM posts WHERE source = %s", (source,)
+    ).fetchone()[0]
+
+
 def is_capped_free(con: psycopg.Connection, free_limit: int) -> bool:
     """Is this tenant a free account sitting at the free-import cap? The single predicate
     behind every "complete your library" upsell surface — any purchase flips it false
@@ -537,8 +548,7 @@ def is_capped_free(con: psycopg.Connection, free_limit: int) -> bool:
     fetch); sub-limit users are provably uncapped and see nothing."""
     if is_ingestion_paid(con) or import_limit(con) > 0:
         return False
-    n = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
-    return n >= free_limit
+    return post_count(con, "x") >= free_limit
 
 
 def library_more_exists(con: psycopg.Connection) -> bool:

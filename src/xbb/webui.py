@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from . import auth, authui, categorize, credits, jobs, landing, mail, storage, xapi, xauth, xconv
+from . import (auth, authui, bookmarks, categorize, credits, ingestion, jobs, landing, mail,
+               storage, xapi, xauth, xconv)
 from .ask import trim_history
 from .config import Config
 from .deps import get_ai, get_db, resolve_tenant
@@ -175,8 +176,7 @@ def ui_refresh_start(request: Request, con=Depends(get_db)):
     # purchased import_limit; None = unlimited). At the cap, send them to the billing slider.
     cap = storage.effective_import_cap(con, cfg.free_bookmark_limit)
     if cap is not None:
-        n = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
-        if n >= cap:
+        if storage.post_count(con, "x") >= cap:
             return RedirectResponse(url="/ui/billing", status_code=303)
     jobs.start(resolve_tenant(request, cfg))  # sync runs under THIS user's tenant
     return RedirectResponse(url="/ui/refresh", status_code=303)
@@ -190,7 +190,7 @@ def ui_refresh(request: Request, con=Depends(get_db)):
     # First-run: adapt to HOW they signed up. X sign-in already granted bookmark access
     # (one tap = connected); magic-link users still need the Connect X step first.
     first_run = (not running and s["step"] in ("idle",)
-                 and con.execute("SELECT COUNT(*) FROM posts").fetchone()[0] == 0)
+                 and storage.post_count(con, "x") == 0)  # browser-only users still need Connect X
     btn_label = "Syncing…" if running else "↻ Sync now"
     if s["error"]:
         state = f'<div class="answer" style="border-left-color:#d64545">⚠️ {esc(s["error"])}</div>'
@@ -263,6 +263,90 @@ def ui_refresh(request: Request, con=Depends(get_db)):
         "free slice, each new bookmark uses one import (1¢).</p>"
     )
     return page("Sync", state + form + note)
+
+
+# --------------------------------------------------------------------- browser import
+
+MAX_IMPORT_UPLOAD_BYTES = 10 * 1024 * 1024  # a 20k-bookmark export is ~5 MB; 10 caps abuse
+
+
+def _import_body(con, cfg: Config, error: str | None = None, notice: str | None = None) -> str:
+    used = storage.post_count(con, "browser")
+    cap = cfg.free_web_bookmark_limit
+    msg = ""
+    if error:
+        msg = f'<div class="answer" style="border-left-color:#d64545">⚠️ {esc(error)}</div>'
+    elif notice:
+        msg = f'<div class="answer">{esc(notice)}</div>'
+    return (
+        "<p class=lead>Bring the rest of your saved web: upload your browser's bookmark "
+        "export and it gets embedded, labeled and searchable alongside your X bookmarks — "
+        "<b>free</b>.</p>"
+        + msg +
+        '<h3>1 · Export from your browser</h3>'
+        "<p><b>Chrome</b> — <span class=muted>⋮ menu → Bookmarks and lists → Bookmark "
+        "manager → ⋮ (top right) → <b>Export bookmarks</b></span><br>"
+        "<b>Firefox</b> — <span class=muted>Ctrl/⌘+Shift+O → Import and Backup → "
+        "<b>Export Bookmarks to HTML…</b></span><br>"
+        "<span class=muted>Safari and Edge exports (same HTML format) work too.</span></p>"
+        "<h3>2 · Upload the file</h3>"
+        '<form method=post action="/ui/import" enctype="multipart/form-data" class=row>'
+        '<input type=file name=file accept=".html,.htm,text/html" required>'
+        "<button>Import bookmarks</button></form>"
+        f"<p class=muted style='margin-top:1.2rem'>{used:,} of {cap:,} free browser "
+        "bookmarks used · re-uploading is safe (already-imported links are skipped) · "
+        "folders are kept as context for the AI labeling.</p>"
+    )
+
+
+@ui_router.get("/ui/import")
+def ui_import(con=Depends(get_db)):
+    return page("Import", _import_body(con, Config.from_env()))
+
+
+@ui_router.post("/ui/import")
+def ui_import_post(request: Request, file: UploadFile = File(...), con=Depends(get_db)):
+    cfg = Config.from_env()
+    raw = file.file.read(MAX_IMPORT_UPLOAD_BYTES + 1)
+    if len(raw) > MAX_IMPORT_UPLOAD_BYTES:
+        return page("Import", _import_body(con, cfg, error="That file is over 10 MB — upload "
+                    "a bookmarks export, not a page archive."))
+    content = raw.decode("utf-8", errors="replace")
+    low = content.lower()
+    if "netscape-bookmark" not in low and "<dl" not in low:
+        return page("Import", _import_body(con, cfg, error="That doesn't look like a bookmarks "
+                    "export — use your browser's “Export bookmarks” (HTML) file."))
+
+    parsed = bookmarks.parse_netscape_html(content)
+    if not parsed:
+        return page("Import", _import_body(con, cfg, error="No importable links found in that "
+                    "file (bookmarklets and browser smart-folders are skipped)."))
+
+    existing = {r[0] for r in
+                con.execute("SELECT id FROM posts WHERE source = 'browser'").fetchall()}
+    fresh = [bm for bm in parsed if bookmarks.record_id(bm["url"]) not in existing]
+    dup = len(parsed) - len(fresh)
+    remaining = max(0, cfg.free_web_bookmark_limit - len(existing))
+    if not fresh:
+        return page("Import", _import_body(con, cfg, notice=f"All {len(parsed):,} bookmarks in "
+                    "that file are already in your library — nothing new to import."))
+    if remaining == 0:
+        return page("Import", _import_body(con, cfg, error="You've reached the free browser-"
+                    f"bookmark limit ({cfg.free_web_bookmark_limit:,})."))
+    # Over the cap, keep the NEWEST saves — they're the ones people search for.
+    fresh.sort(key=lambda b: b.get("add_date") or 0, reverse=True)
+    over_cap = max(0, len(fresh) - remaining)
+    kept = fresh[:remaining]
+
+    base = con.execute("SELECT COALESCE(MAX(bm_rank), 0) FROM posts").fetchone()[0]
+    for rec in bookmarks.to_records(kept, base):
+        ingestion._upsert_post(con, rec)
+    con.commit()
+    tenant = resolve_tenant(request, cfg)
+    logger.info("import.web tenant=%s imported=%d dup=%d over_cap=%d",
+                tenant, len(kept), dup, over_cap)
+    jobs.start_enrich(tenant, len(kept))  # embed + label in the background
+    return RedirectResponse(url="/ui/refresh", status_code=303)  # existing progress page
 
 
 def _capped_banner(con, cfg: Config, surface: str) -> str:

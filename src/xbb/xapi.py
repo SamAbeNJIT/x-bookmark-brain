@@ -190,7 +190,8 @@ def backfill_via_api(con, client_id: str, incremental: bool = True,
     unpaid accounts import only their most-recent N). Returns the number of newly-added posts.
     """
     client = XApiClient(con, client_id)
-    before = con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+    # Entitlement math counts X posts only: free browser imports must not eat the paid slice.
+    before = con.execute("SELECT COUNT(*) FROM posts WHERE source = 'x'").fetchone()[0]
     total = before
     new_ids: list[str] = []   # newly-stored ids, in fetch (newest-first) order
     seen_ids: list[str] = []  # every id seen this run, in fetch order (for full re-rank)
@@ -248,4 +249,4 @@ def backfill_via_api(con, client_id: str, incremental: bool = True,
         for i, pid in enumerate(reversed(new_ids)):  # oldest-of-batch first
             con.execute("UPDATE posts SET bm_rank = %s WHERE id = %s", (base + 1 + i, pid))
         con.commit()
-    return con.execute("SELECT COUNT(*) FROM posts").fetchone()[0] - before
+    return con.execute("SELECT COUNT(*) FROM posts WHERE source = 'x'").fetchone()[0] - before

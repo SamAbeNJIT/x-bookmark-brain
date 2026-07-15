@@ -176,10 +176,10 @@ def _upsert_post(con: Any, rec: dict[str, Any]) -> None:
     con.execute(
         """
         INSERT INTO posts (
-            id, url, text, lang, created_at, bookmarked_at, author_id, kind,
+            id, source, url, text, lang, created_at, bookmarked_at, author_id, kind,
             parent_post_id, media_json, hashtags_json, links_json, like_count,
             repost_count, raw_json, bm_rank
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (tenant_id, id) DO UPDATE SET
             url=excluded.url, text=excluded.text, lang=excluded.lang,
             created_at=excluded.created_at, author_id=excluded.author_id, kind=excluded.kind,
@@ -191,6 +191,7 @@ def _upsert_post(con: Any, rec: dict[str, Any]) -> None:
         """,
         (
             rec["id"],
+            rec.get("source", "x"),
             rec.get("url"),
             rec.get("text"),
             rec.get("lang"),

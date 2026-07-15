@@ -10,7 +10,7 @@ import html
 import json
 import re
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from fastapi.responses import HTMLResponse
 
@@ -266,6 +266,7 @@ _NAV_ITEMS = [
     ("/ui/feed", "Feed", "▦"),
     ("/ui/taxonomy", "Taxonomy", "⚙"),
     ("/ui/refresh", "Sync", "↻"),
+    ("/ui/import", "Import", "⤒"),
     ("/ui/billing", "Billing", "◈"),
     ("/ui/feedback", "Feedback", "✉"),
 ]
@@ -420,12 +421,16 @@ def post_card(p: dict[str, Any]) -> str:
         if avatar
         else '<div class="avatar"></div>'
     )
-    at = (
-        f'<a class="handle" href="https://x.com/{handle}" target="_blank" '
-        f'rel="noopener">@{handle}</a>'
-        if handle
-        else ""
-    )
+    if handle:
+        at = (f'<a class="handle" href="https://x.com/{handle}" target="_blank" '
+              f'rel="noopener">@{handle}</a>')
+    elif url:
+        # Author-less post (browser bookmark): the site's domain is the closest thing to a byline.
+        domain = esc(urlsplit(url).netloc.lower().removeprefix("www."))
+        at = (f'<a class="handle" href="{esc(url)}" target="_blank" '
+              f'rel="noopener">🌐 {domain}</a>')
+    else:
+        at = ""
     head = f'<div class="head">{av}{at}</div>'
     media = _media_imgs(p.get("media_json"))
     link = f'<a href="{esc(url)}" target="_blank" rel="noopener">open ↗</a>' if url else ""
