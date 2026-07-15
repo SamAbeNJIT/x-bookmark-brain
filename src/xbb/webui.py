@@ -863,29 +863,59 @@ def _card_view(request: Request, view: str, base: str, qs: str = ""):
     return toggle, cards_class, respond
 
 
+# Feed source chips: friendly labels for known adapters; unknown future sources fall back
+# to a capitalized name automatically, so new adapters appear with zero UI work.
+_SOURCE_LABELS = {"x": "𝕏 X", "browser": "🌐 Web"}
+
+
+def _source_chips(con, active_source: str, qs: str) -> tuple[str, str]:
+    """Right-aligned source filter (All / 𝕏 / 🌐 / …) mirroring the category legend: chips
+    are data-driven from the sources actually present, with counts. Hidden while the library
+    is single-source. Returns (chips_html, validated_source)."""
+    rows = con.execute(
+        "SELECT source, COUNT(*) FROM posts GROUP BY source ORDER BY 2 DESC").fetchall()
+    known = {r[0] for r in rows}
+    source = active_source if active_source in known else ""
+    if len(rows) < 2:
+        return "", source
+    chips = [f'<a href="/ui/feed?{qs.lstrip("&")}" class="{"on" if not source else ""}">All</a>']
+    for s, n in rows:
+        label = _SOURCE_LABELS.get(s, s.capitalize())
+        chips.append(f'<a href="/ui/feed?source={s}{qs}" '
+                     f'class="{"on" if source == s else ""}">{label} '
+                     f'<span class=muted>{n:,}</span></a>')
+    return ('<div class="view-toggle" style="margin-right:.8rem">' + "".join(chips) + "</div>",
+            source)
+
+
 @ui_router.get("/ui/feed")
 def ui_feed(request: Request, parent: str = "", offset: int = 0, partial: int = 0,
-            view: str = "", con=Depends(get_db)):
+            view: str = "", source: str = "", con=Depends(get_db)):
     active = parent or None
-    posts = categorize.feed_posts(con, parent=active, limit=_PAGE, offset=offset)
+    src = source if source in ("x", "browser") or not source else ""
+    posts = categorize.feed_posts(con, parent=active, limit=_PAGE, offset=offset,
+                                  source=src or None)
 
     # Partial: just the card HTML, for the infinite-scroll appender to insert.
     if partial:
         return HTMLResponse("".join(post_card(p) for p in posts))
 
-    qs = f"&parent={active}" if active else ""
-    toggle, cards_class, respond = _card_view(request, view, "/ui/feed", qs)
+    qs = (f"&parent={active}" if active else "")
+    chips, src = _source_chips(con, src, qs + (f"&view={view}" if view else ""))
+    qs_view = qs + (f"&source={src}" if src else "")
+    toggle, cards_class, respond = _card_view(request, view, "/ui/feed", qs_view)
 
     groups = [(g["parent"], g["total"]) for g in categorize.category_tree(con)]
     where = f" in {esc(active)}" if active else ""
-    note = f"{toggle}<p class=lead>Newest first{where} · scroll to keep loading. Tap a color to filter.</p>"
+    note = f"{chips}{toggle}<p class=lead>Newest first{where} · scroll to keep loading. Tap a color to filter.</p>"
     banner = _capped_banner(con, Config.from_env(), "banner_feed")
 
     def _respond(body: str):
         return respond("Feed", body)
 
     if not posts:
-        return _respond(banner + legend(groups, active) + toggle + "<p class=muted>No tweets here yet.</p>")
+        return _respond(banner + chips + legend(groups, active) + toggle
+                        + "<p class=muted>Nothing here yet.</p>")
 
     feed = f'<div id="feed" class="{cards_class}">{"".join(post_card(p) for p in posts)}</div>'
     sentinel = '<div id="more" class="muted" style="text-align:center;padding:1.6rem">loading…</div>'
@@ -893,11 +923,13 @@ def ui_feed(request: Request, parent: str = "", offset: int = 0, partial: int = 
     js = (
         "<script>(function(){var off=" + str(_PAGE) + ",busy=false,done=" + done
         + ",parent=" + json.dumps(active or "")
+        + ",src=" + json.dumps(src or "")
         + ",feed=document.getElementById('feed'),more=document.getElementById('more');"
         "if(done){more.remove();return;}"
         "var io=new IntersectionObserver(function(es){"
         "if(!es[0].isIntersecting||busy||done)return;busy=true;"
-        "var u='/ui/feed?partial=1&offset='+off+(parent?'&parent='+encodeURIComponent(parent):'');"
+        "var u='/ui/feed?partial=1&offset='+off+(parent?'&parent='+encodeURIComponent(parent):'')"
+        "+(src?'&source='+encodeURIComponent(src):'');"
         "fetch(u).then(function(r){return r.text();}).then(function(h){"
         "var n=(h.match(/class=\"post\"/g)||[]).length;"
         "if(n===0){done=true;more.remove();return;}"

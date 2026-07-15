@@ -341,13 +341,15 @@ def posts_unlabeled(con: psycopg.Connection, limit: int = 600) -> list[dict[str,
 
 
 def feed_posts(
-    con: psycopg.Connection, parent: str | None = None, limit: int = 150, offset: int = 0
+    con: psycopg.Connection, parent: str | None = None, limit: int = 150, offset: int = 0,
+    source: str | None = None,
 ) -> list[dict[str, Any]]:
     """A page of posts for the color feed, each tagged with one parent group (for tinting).
 
-    Filtered to a single parent group when given. A post in multiple groups is shown once,
-    under one group (arbitrary when unfiltered; the matching one when filtered). `offset`
-    drives the rolling/infinite-scroll paging.
+    Filtered to a single parent group and/or a single source ('x' / 'browser' / future
+    adapters) when given. A post in multiple groups is shown once, under one group
+    (arbitrary when unfiltered; the matching one when filtered). `offset` drives the
+    rolling/infinite-scroll paging.
     """
     # DISTINCT ON (p.id) shows a post once even if it's in several categories of the group.
     inner = """
@@ -358,13 +360,20 @@ def feed_posts(
         JOIN categories c ON c.id = a.category_id
         LEFT JOIN authors au ON au.tenant_id = p.tenant_id AND au.id = p.author_id
     """
-    where = " WHERE c.parent = %s" if parent else ""
+    clauses, params = [], []
+    if parent:
+        clauses.append("c.parent = %s")
+        params.append(parent)
+    if source:
+        clauses.append("p.source = %s")
+        params.append(source)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     sql = (
         "SELECT id, url, text, handle, avatar_url, media_json, parent FROM ("
         + inner + where + " ORDER BY p.id, p.bm_rank DESC"
         + ") s ORDER BY bm_rank DESC LIMIT %s OFFSET %s"
     )
-    params = (parent, limit, offset) if parent else (limit, offset)
+    params = tuple(params) + (limit, offset)
     rows = con.execute(sql, params)
     return [
         {"id": r[0], "url": r[1], "text": r[2], "handle": r[3],

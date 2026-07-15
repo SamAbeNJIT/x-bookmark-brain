@@ -133,6 +133,24 @@ def test_browser_upload_blocked_when_free_used_and_balance_empty(client, seeded_
         con.close()
 
 
+def test_feed_source_filter_and_chips(client, seeded_db, no_enrich, fake_ai):
+    """?source= filters the feed; the chip row appears once the library is multi-source."""
+    from xbb import categorize
+    _upload(client)  # adds browser posts alongside the 3 seeded X posts
+    con = storage.connect(seeded_db)
+    categorize.save_taxonomy(con, [{"name": "RAG"}, {"name": "Agents"}])
+    categorize.assign_unassigned(con, fake_ai)  # feed only shows categorized posts
+    con.close()
+    html = client.get("/ui/feed").text
+    assert "🌐 Web" in html and "𝕏 X" in html           # chips render (multi-source library)
+    web_only = client.get("/ui/feed?source=browser").text
+    assert "postgresql.org" in web_only                 # a browser card is present
+    assert "RAG evaluation" not in web_only             # seeded X tweet text filtered out
+    x_only = client.get("/ui/feed?source=x").text
+    assert "postgresql.org" not in x_only               # browser cards filtered out
+    assert "RAG evaluation" in x_only
+
+
 def test_browser_imports_do_not_consume_x_entitlement(client, seeded_db, no_enrich,
                                                       monkeypatch):
     """The regression that matters: free browser rows must not flip the X upsell predicate
