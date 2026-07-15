@@ -784,7 +784,12 @@ def ui_feedback_post(request: Request, message: str = Form(...), con=Depends(get
     from . import mail
     cfg = Config.from_env()
     tenant = resolve_tenant(request, cfg)
-    sender = storage.get_account_email(con, tenant) or tenant
+    # X-sign-in accounts have no email — the @handle is the reply channel (a bare tenant
+    # uuid in the owner's inbox is useless; support request 2026-07-15).
+    row = con.execute("SELECT email, x_handle FROM accounts WHERE id = %s::uuid",
+                      (tenant,)).fetchone()
+    email, handle = (row or (None, None))
+    sender = email or (f"@{handle} (X, no email)" if handle else tenant)
     mail.send_owner_alert("💬 x-bookmarks feedback",
                           f"From: {sender}\n\n{message[:4000]}",
                           ses_sender=cfg.ses_sender,
