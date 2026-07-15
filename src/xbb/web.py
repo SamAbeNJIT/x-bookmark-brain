@@ -15,7 +15,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, authui, billing, categorize, credits, jobs, legal, mail, pricing, storage
+from . import auth, authui, billing, categorize, credits, jobs, legal, mail, pricing, storage, xconv
 from .config import Config
 from .deps import SESSION_COOKIE, get_ai, get_db, resolve_tenant
 from .log import logger
@@ -207,7 +207,7 @@ def create_app() -> FastAPI:
         return authui.check_email_page(email)
 
     @app.get("/auth/verify")
-    def auth_verify_route(token: str, con=Depends(get_db)):
+    def auth_verify_route(token: str, request: Request, con=Depends(get_db)):
         cfg = Config.from_env()
         email = auth.verify_login_token(token, cfg.session_secret)
         if not email:
@@ -219,6 +219,9 @@ def create_app() -> FastAPI:
             mail.send_owner_alert("🆕 x-bookmarks signup", f"New account: {email}",
                                   ses_sender=cfg.ses_sender,
                                   owner_email=cfg.owner_alert_email, region=cfg.aws_region)
+            # Ad attribution: NEW accounts only — a login never fires a registration event.
+            xconv.fire_registration(cfg, account_id,
+                                    request.cookies.get(xconv.TWCLID_COOKIE))
         session = auth.make_session_token(account_id, cfg.session_secret)
         resp = RedirectResponse("/", status_code=303)
         resp.set_cookie(SESSION_COOKIE, session, httponly=True, samesite="lax",
@@ -500,6 +503,19 @@ def create_app() -> FastAPI:
                 if not (token and auth.verify_session_token(token, cfg.session_secret)):
                     return RedirectResponse("/login", status_code=303)
         return await call_next(request)
+
+    @app.middleware("http")
+    async def _twclid_capture(request: Request, call_next):
+        """First-party capture of X's ad click id (?twclid=...) so a later signup can be
+        attributed server-side (xconv.py). No third-party script, no cross-site cookie;
+        an empty/missing param never overwrites a stored value, a fresh non-empty click
+        always wins (newest-click attribution)."""
+        response = await call_next(request)
+        twclid = (request.query_params.get("twclid") or "").strip()
+        if twclid:
+            response.set_cookie(xconv.TWCLID_COOKIE, twclid[:512], max_age=xconv.TWCLID_MAX_AGE,
+                                httponly=True, samesite="lax")
+        return response
 
     @app.middleware("http")
     async def _pageview_log(request: Request, call_next):

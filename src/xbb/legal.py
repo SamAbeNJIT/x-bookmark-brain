@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from .templates import page
 
-_UPDATED = "July 13, 2026"
+_UPDATED = "July 14, 2026"
 _CONTACT = "support@x-bookmarks.ai"
 
 
@@ -103,7 +103,12 @@ needed for each operation (e.g. the posts being labeled or the question being an
 encryption for sensitive tokens. Transport is HTTPS everywhere.</p>
 
 <h3>Cookies</h3>
-<p>One session cookie, used to keep you signed in. No tracking or advertising cookies.</p>
+<p>One session cookie to keep you signed in, and one preference cookie for your feed view.
+If you arrive from an X ad, a first-party cookie briefly remembers the ad's click id so
+that, if you then create an account, we can tell X that its ad resulted in a signup — that
+single fact and nothing else (no third-party scripts, no cross-site tracking, and nothing
+about what you save or ask). The click id expires after 30 days and is not kept on our
+servers.</p>
 
 <h3>Your rights</h3>
 <p>Email <a href="mailto:{_CONTACT}">{_CONTACT}</a> to request an export of your data or deletion

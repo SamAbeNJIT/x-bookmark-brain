@@ -77,6 +77,14 @@ class Config:
     bedrock_api_key: str | None
     # Model for ask answers (default: the reasoning model). Eval 2026-07-13: Haiku 4.5.
     answer_model: str | None
+    # X Ads Conversion API (server-side registration attribution; see xconv.py). All six
+    # must be set or tracking is skipped entirely (fail-safe).
+    x_ads_pixel_id: str | None
+    x_ads_event_id: str | None
+    x_ads_consumer_key: str | None
+    x_ads_consumer_secret: str | None
+    x_ads_access_token: str | None
+    x_ads_access_secret: str | None
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -113,4 +121,10 @@ class Config:
             answer_backend=os.getenv("ANSWER_BACKEND", "bedrock"),
             bedrock_api_key=os.getenv("BEDROCK_API_KEY"),
             answer_model=os.getenv("ANSWER_MODEL"),
+            x_ads_pixel_id=os.getenv("X_ADS_PIXEL_ID"),
+            x_ads_event_id=os.getenv("X_ADS_EVENT_ID"),
+            x_ads_consumer_key=os.getenv("X_ADS_CONSUMER_KEY"),
+            x_ads_consumer_secret=os.getenv("X_ADS_CONSUMER_SECRET"),
+            x_ads_access_token=os.getenv("X_ADS_ACCESS_TOKEN"),
+            x_ads_access_secret=os.getenv("X_ADS_ACCESS_SECRET"),
         )

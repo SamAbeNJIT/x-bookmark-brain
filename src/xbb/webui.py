@@ -11,7 +11,7 @@ import json
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from . import auth, authui, categorize, credits, jobs, landing, mail, storage, xapi, xauth
+from . import auth, authui, categorize, credits, jobs, landing, mail, storage, xapi, xauth, xconv
 from .ask import trim_history
 from .config import Config
 from .deps import get_ai, get_db, resolve_tenant
@@ -98,7 +98,8 @@ def oauth_signin(con=Depends(get_db)):
     )
 
 
-def _signin_callback(code: str, state: str, error: str, con) -> RedirectResponse | HTMLResponse:
+def _signin_callback(request: Request, code: str, state: str, error: str,
+                     con) -> RedirectResponse | HTMLResponse:
     """Complete sign-in-with-X: exchange the code, identify the user, find-or-create their
     account, store the (already-granted!) bookmark token under their tenant, set the session,
     auto-start the free-100 sync, and land new accounts on the progress page. (Owner reversed
@@ -130,7 +131,11 @@ def _signin_callback(code: str, state: str, error: str, con) -> RedirectResponse
         mail.send_owner_alert("🆕 x-bookmarks signup", f"New account via Sign in with X: @{handle}",
                               ses_sender=cfg.ses_sender,
                               owner_email=cfg.owner_alert_email, region=cfg.aws_region)
-        jobs.start(account_id)  # free-100 sync starts immediately; /ui/refresh shows progress
+        jobs.start(account_id)  # free-slice sync starts immediately; /ui/refresh shows progress
+        # Ad attribution: NEW accounts only (the twclid cookie survives the X OAuth round
+        # trip because it's first-party) — repeat sign-ins never fire.
+        xconv.fire_registration(cfg, account_id,
+                                request.cookies.get(xconv.TWCLID_COOKIE))
     session = auth.make_session_token(account_id, cfg.session_secret)
     resp = RedirectResponse(url="/ui/refresh" if created else "/", status_code=303)
     resp.set_cookie("xbb_session", session, httponly=True, samesite="lax",
@@ -142,7 +147,7 @@ def _signin_callback(code: str, state: str, error: str, con) -> RedirectResponse
 def oauth_callback(request: Request, code: str = "", state: str = "", error: str = "",
                    con=Depends(get_db)):
     if state.startswith("si_"):  # sign-in-with-X shares the registered redirect URI
-        return _signin_callback(code, state, error, con)
+        return _signin_callback(request, code, state, error, con)
     if error:
         return page("Connect X", f'<div class="answer" style="border-left-color:#d64545">X denied the connection: {esc(error)}</div>')
     verifier = storage.pop_pkce(con, state)
