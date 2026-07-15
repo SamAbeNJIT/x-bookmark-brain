@@ -74,8 +74,18 @@ def test_reupload_is_idempotent(client, seeded_db, no_enrich):
         con.close()
 
 
+def _make_free(dsn, import_limit=0):
+    from xbb.config import DEFAULT_TENANT_ID
+    con = storage.connect(dsn)
+    con.execute("UPDATE accounts SET ingestion_paid = false, import_limit = %s WHERE id = %s",
+                (import_limit, DEFAULT_TENANT_ID))
+    con.commit()
+    con.close()
+
+
 def test_cap_clamps_to_newest_saves(client, seeded_db, no_enrich, monkeypatch):
     monkeypatch.setenv("FREE_WEB_BOOKMARK_LIMIT", "2")
+    _make_free(seeded_db)  # comped accounts bypass caps entirely; the cap needs a free acct
     r = _upload(client)
     assert r.status_code == 303
     con = storage.connect(seeded_db)
@@ -87,6 +97,38 @@ def test_cap_clamps_to_newest_saves(client, seeded_db, no_enrich, monkeypatch):
             "SELECT url FROM posts WHERE source = 'browser'").fetchall()}
         assert "https://example.com/recipe" in urls          # ADD_DATE 1700000600, newest
         assert "https://www.postgresql.org/docs/" in urls    # 1700000300, second-newest
+    finally:
+        con.close()
+
+
+def test_browser_overflow_consumes_shared_imports_balance(client, seeded_db, no_enrich,
+                                                          monkeypatch):
+    """2026-07-15: first 500 browser bookmarks free, then 1¢ each from the SHARED rolling
+    balance — and what browser overflow uses is no longer available to the X side."""
+    monkeypatch.setenv("FREE_WEB_BOOKMARK_LIMIT", "2")
+    _make_free(seeded_db, import_limit=1)   # bought 1 import; chrome fixture has 4 fresh
+    _upload(client)
+    con = storage.connect(seeded_db)
+    try:
+        assert storage.post_count(con, "browser") == 3        # 2 free + 1 from the balance
+        assert storage.imports_available(con, 100, 2) == 0    # pool drained
+        # the X cap shrank by the browser overage: free 100 + max(0, 1 - 1) = 100
+        assert storage.effective_import_cap(con, 100, 2) == 100
+    finally:
+        con.close()
+
+
+def test_browser_upload_blocked_when_free_used_and_balance_empty(client, seeded_db,
+                                                                 no_enrich, monkeypatch):
+    monkeypatch.setenv("FREE_WEB_BOOKMARK_LIMIT", "2")
+    _make_free(seeded_db)                    # no balance at all
+    _upload(client)                          # fills the free 2
+    r = _upload(client, "firefox_bookmarks.html")
+    assert r.status_code == 200
+    assert "imports balance is empty" in r.text
+    con = storage.connect(seeded_db)
+    try:
+        assert storage.post_count(con, "browser") == 2  # nothing beyond the free slice
     finally:
         con.close()
 

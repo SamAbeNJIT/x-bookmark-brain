@@ -516,12 +516,29 @@ def reduce_import_limit(con: psycopg.Connection, n: int) -> None:
     con.commit()
 
 
-def effective_import_cap(con: psycopg.Connection, free_limit: int) -> int | None:
-    """Total bookmarks this tenant may store: None = unlimited (comped/legacy ingestion_paid),
-    else the free slice + purchased entitlement."""
+def effective_import_cap(con: psycopg.Connection, free_limit: int,
+                         free_web_limit: int | None = None) -> int | None:
+    """Total X posts this tenant may store: None = unlimited (comped/legacy ingestion_paid),
+    else the free X slice + the purchased imports balance. The balance is a SHARED pool
+    across sources (2026-07-15): pass `free_web_limit` so browser bookmarks imported beyond
+    their own free slice reduce what remains for X. Omitting it preserves X-only math."""
     if is_ingestion_paid(con):
         return None
-    return free_limit + import_limit(con)
+    web_overage = (0 if free_web_limit is None
+                   else max(0, post_count(con, "browser") - free_web_limit))
+    return free_limit + max(0, import_limit(con) - web_overage)
+
+
+def imports_available(con: psycopg.Connection, free_limit: int,
+                      free_web_limit: int) -> int | None:
+    """Unused imports in the shared rolling balance: purchased imports minus every post
+    already stored beyond its source's free slice. None = unlimited (comped). The balance
+    is never decremented — it's derived from counts, so the math can't drift."""
+    if is_ingestion_paid(con):
+        return None
+    x_over = max(0, post_count(con, "x") - free_limit)
+    web_over = max(0, post_count(con, "browser") - free_web_limit)
+    return max(0, import_limit(con) - x_over - web_over)
 
 
 def is_ingestion_paid(con: psycopg.Connection) -> bool:

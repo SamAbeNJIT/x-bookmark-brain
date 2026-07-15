@@ -174,7 +174,8 @@ def ui_refresh_start(request: Request, con=Depends(get_db)):
     cfg = Config.from_env()
     # Import gate: sync is allowed while the account is under its entitlement (free slice +
     # purchased import_limit; None = unlimited). At the cap, send them to the billing slider.
-    cap = storage.effective_import_cap(con, cfg.free_bookmark_limit)
+    cap = storage.effective_import_cap(con, cfg.free_bookmark_limit,
+                                       cfg.free_web_bookmark_limit)
     if cap is not None:
         if storage.post_count(con, "x") >= cap:
             return RedirectResponse(url="/ui/billing", status_code=303)
@@ -280,8 +281,9 @@ def _import_body(con, cfg: Config, error: str | None = None, notice: str | None 
         msg = f'<div class="answer">{esc(notice)}</div>'
     return (
         "<p class=lead>Bring the rest of your saved web: upload your browser's bookmark "
-        "export and it gets embedded, labeled and searchable alongside your X bookmarks — "
-        "<b>free</b>.</p>"
+        "export and it gets embedded, labeled and searchable alongside your X bookmarks. "
+        f"Your first <b>{cap:,} are free</b>; beyond that each bookmark uses one import "
+        "(1¢) from your balance.</p>"
         + msg +
         '<h3>1 · Export from your browser</h3>'
         "<p><b>Chrome</b> — <span class=muted>⋮ menu → Bookmarks and lists → Bookmark "
@@ -326,17 +328,23 @@ def ui_import_post(request: Request, file: UploadFile = File(...), con=Depends(g
                 con.execute("SELECT id FROM posts WHERE source = 'browser'").fetchall()}
     fresh = [bm for bm in parsed if bookmarks.record_id(bm["url"]) not in existing]
     dup = len(parsed) - len(fresh)
-    remaining = max(0, cfg.free_web_bookmark_limit - len(existing))
     if not fresh:
         return page("Import", _import_body(con, cfg, notice=f"All {len(parsed):,} bookmarks in "
                     "that file are already in your library — nothing new to import."))
-    if remaining == 0:
-        return page("Import", _import_body(con, cfg, error="You've reached the free browser-"
-                    f"bookmark limit ({cfg.free_web_bookmark_limit:,})."))
+    # First free_web_bookmark_limit are free; beyond that, each browser bookmark draws one
+    # import from the SHARED rolling balance (2026-07-15: "500 free, then 1¢").
+    remaining_free = max(0, cfg.free_web_bookmark_limit - len(existing))
+    avail = storage.imports_available(con, cfg.free_bookmark_limit, cfg.free_web_bookmark_limit)
+    allowed = len(fresh) if avail is None else remaining_free + avail
+    if allowed == 0:
+        return page("Import", _import_body(con, cfg, error=(
+            f"Your free {cfg.free_web_bookmark_limit:,} browser bookmarks are used and your "
+            "imports balance is empty — top up on the billing page (1¢ per bookmark) and "
+            "upload again.")))
     # Over the cap, keep the NEWEST saves — they're the ones people search for.
     fresh.sort(key=lambda b: b.get("add_date") or 0, reverse=True)
-    over_cap = max(0, len(fresh) - remaining)
-    kept = fresh[:remaining]
+    over_cap = max(0, len(fresh) - allowed)
+    kept = fresh[:allowed]
 
     base = con.execute("SELECT COALESCE(MAX(bm_rank), 0) FROM posts").fetchone()[0]
     for rec in bookmarks.to_records(kept, base):

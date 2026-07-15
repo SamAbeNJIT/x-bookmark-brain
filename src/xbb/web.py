@@ -253,7 +253,8 @@ def create_app() -> FastAPI:
     def billing_page_route(request: Request, src: str = "", con=Depends(get_db)):
         cfg = Config.from_env()
         bal = storage.credit_balance(con)
-        cap = storage.effective_import_cap(con, cfg.free_bookmark_limit)
+        cap = storage.effective_import_cap(con, cfg.free_bookmark_limit,
+                                           cfg.free_web_bookmark_limit)
         free_left = max(cfg.free_asks_per_day - storage.free_asks_used_today(con), 0)
         asks = int(bal / cfg.ask_price_usd) if cfg.ask_price_usd else 0
         body = ""
@@ -280,15 +281,20 @@ def create_app() -> FastAPI:
         if cap is None:
             body += "<p class=muted>✓ Full bookmark history unlocked.</p>"
         else:
-            n = storage.post_count(con, "x")  # the slider buys X imports; browser ones are free
-            remaining = max(cap - n, 0)
-            purchased_n = cap - cfg.free_bookmark_limit
+            # The rolling balance is a SHARED pool: any source's posts beyond its free slice
+            # draw from it (X beyond free X slice, browser beyond the free 500).
+            remaining = storage.imports_available(con, cfg.free_bookmark_limit,
+                                                  cfg.free_web_bookmark_limit)
+            n_x = storage.post_count(con, "x")
+            n_web = storage.post_count(con, "browser")
+            lib = f"{n_x:,} X posts" + (f" + {n_web:,} web bookmarks" if n_web else "")
+            purchased_n = storage.import_limit(con)
             body += (
-                f"<p class=lead><b>{remaining:,} imports remaining</b> · "
-                f"{min(n, cap):,} of your library imported "
-                f"({cfg.free_bookmark_limit:,} free"
-                + (f" + {purchased_n:,} purchased" if purchased_n > 0 else "")
-                + "). Unused imports roll over and cover whatever you save next.</p>")
+                f"<p class=lead><b>{remaining:,} imports remaining</b> · {lib} imported "
+                f"({cfg.free_bookmark_limit:,} X + {cfg.free_web_bookmark_limit:,} web free"
+                + (f"; {purchased_n:,} imports purchased" if purchased_n > 0 else "")
+                + "). Unused imports roll over and cover whatever you save next — from any "
+                "source.</p>")
             if cfg.stripe_secret_key:
                 cents = int(cfg.price_per_bookmark_usd * 100)
                 per = cfg.price_per_bookmark_usd

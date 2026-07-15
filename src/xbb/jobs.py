@@ -90,7 +90,8 @@ def _run(cfg: Config, tenant_id: str) -> None:
 
         _set(tenant_id, step="backfill", detail="fetching new bookmarks from X…")
         # Entitlement cap: free slice + purchased import_limit (None = unlimited/comped).
-        cap = storage.effective_import_cap(con, cfg.free_bookmark_limit)
+        cap = storage.effective_import_cap(con, cfg.free_bookmark_limit,
+                                           cfg.free_web_bookmark_limit)
         n_posts = storage.post_count(con, "x")  # entitlement counts X posts only
         purchased = storage.import_limit(con)
         # Page the FULL timeline (non-incremental) when there's unfetched entitlement below the
