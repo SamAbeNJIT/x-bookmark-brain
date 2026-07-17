@@ -1,5 +1,24 @@
 """HTML screen tests — same fakes/DI as the JSON API tests."""
 
+from xbb.webui import _source_chips
+
+
+def test_source_chip_urls_are_percent_encoded():
+    class Rows:
+        def fetchall(self):
+            return [("x", 2), ("weird&source=x", 1)]
+
+    class Connection:
+        def execute(self, sql):
+            return Rows()
+
+    html, source = _source_chips(
+        Connection(), "weird&source=x", {"parent": "AI & Engineering", "view": "list"}
+    )
+    assert source == "weird&source=x"
+    assert "source=weird%26source%3Dx" in html
+    assert "parent=AI+%26+Engineering" in html
+
 
 def test_home_renders(client):
     r = client.get("/")
@@ -43,6 +62,9 @@ def test_refresh_ui_renders(client):
     r = client.get("/ui/refresh")  # GET is side-effect free (POST would trigger a sync)
     assert r.status_code == 200
     assert "Sync" in r.text
+    assert "For X only" in r.text
+    assert "Browser, Reddit, and GitHub remain unlimited and free" in r.text
+    assert "each new bookmark uses one import" not in r.text
 
 
 def test_pageviews_are_logged_server_side(client):
@@ -58,6 +80,49 @@ def test_pageviews_are_logged_server_side(client):
         assert any(m.startswith("ui.view page=/ui/refresh tenant=") for m in seen)
     finally:
         xbb_logger.removeHandler(h)
+
+
+def test_graph_ui_renders_approved_user_centered_visualization(client, seeded_db):
+    client.post("/index")
+    client.post("/taxonomy", json={"categories": [{"name": "RAG"}, {"name": "Agents"}]})
+    client.post("/assign")
+    from xbb.storage import connect
+    con = connect(seeded_db)
+    con.execute("UPDATE categories SET parent = 'Theme <unsafe>' WHERE name = 'RAG'")
+    con.commit()
+    con.close()
+    r = client.get("/ui/graph")
+    assert r.status_code == 200
+    assert 'id="graph"' in r.text and 'data-src="/ui/graph/data"' in r.text
+    assert 'd3@7.9.0/dist/d3.min.js' in r.text
+    assert "fetch('/ui/graph/data')" in r.text
+    assert all(token in r.text for token in ("Centered", "Free force", "Similarity ≥",
+                                              "Edges: on", "Reset", "Center on me"))
+    assert 'data-node-types="user theme post"' in r.text
+    assert 'data-edge-kinds="ownership theme similarity membership"' in r.text
+    assert 'data-layout="user-centered"' in r.text
+    assert 'data-selection-path="post theme user"' in r.text
+    assert 'id="graph-fallback"' in r.text and "JavaScript is required" in r.text
+    assert "3 bookmarks will appear" in r.text
+    assert "Theme &lt;unsafe&gt;" in r.text and "Theme <unsafe>" not in r.text
+    assert all(color in r.text for color in ("#5b6cf0", "#a45cd6", "#e05569", "#d99a1c",
+                                             "#2faa6f", "#2aa7bd", "#9aa0ab"))
+    assert 'href="/ui/graph"' in r.text
+    assert "tenant_id" not in r.text and "@example.com" not in r.text
+
+
+def test_graph_pageview_is_logged(client):
+    import logging
+    from xbb.log import logger as xbb_logger
+    seen = []
+    handler = logging.Handler()
+    handler.emit = lambda record: seen.append(record.getMessage())
+    xbb_logger.addHandler(handler)
+    try:
+        client.get("/ui/graph")
+        assert any(message.startswith("ui.view page=/ui/graph tenant=") for message in seen)
+    finally:
+        xbb_logger.removeHandler(handler)
 
 
 def test_ask_thread_persists_via_localstorage(client):

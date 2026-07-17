@@ -25,6 +25,14 @@ PARENT_COLORS: dict[str, str] = {
     "Other": "#9aa0ab",              # gray
 }
 
+_SOURCE_META = {
+    "x": {"label": "𝕏 X", "author_base": "https://x.com/"},
+    "browser": {"label": "🌐 Web", "author_base": None},
+    "reddit": {"label": "👽 Reddit", "author_base": "https://www.reddit.com/user/"},
+    "github": {"label": "🐙 GitHub", "author_base": "https://github.com/"},
+}
+_SOURCE_LABELS = {source: meta["label"] for source, meta in _SOURCE_META.items()}
+
 
 def parent_color(parent: str | None) -> str | None:
     return PARENT_COLORS.get(parent) if parent else None
@@ -245,15 +253,100 @@ _STYLE = """
                        text-decoration: none; }
   .tree .grow { flex: 1; }
 
+  /* user-centered knowledge graph */
+  .content:has(.graph-shell) { height: 100vh; overflow: hidden;
+                                padding: 18px clamp(16px,2.2vw,30px); }
+  .wrap.wide:has(.graph-shell) { height: 100%; display: flex; flex-direction: column;
+                                 min-height: 0; }
+  .wrap:has(.graph-shell) > h1 { order: 1; margin: 0; font-size: 1.62rem; }
+  .wrap:has(.graph-shell) > .lead { order: 2; margin: .05rem 0 .7rem; font-size: .9rem; }
+  .graph-toolbar { display: flex; gap: .55rem; align-items: center; flex-wrap: wrap;
+                   margin: 0 0 .65rem; order: 3; min-height: 36px; }
+  .graph-toolbar button, .graph-toolbar input, .graph-toolbar label { font-size: .8rem; }
+  .graph-toolbar button { background: var(--panel); color: var(--muted);
+                          border: 1px solid var(--line-2); padding: .48rem .72rem; }
+  .graph-toolbar button.on { background: var(--accent-soft); color: var(--accent-ink);
+                             border-color: #cbc7fa; }
+  .graph-toolbar .graph-search { width: min(240px, 100%); margin-left: auto;
+                                 padding: .48rem .72rem; box-shadow: none; }
+  .wrap:has(.graph-shell) > .legend { order: 4; margin: 0 0 .7rem; flex-wrap: nowrap;
+                                     overflow-x: auto; scrollbar-width: none; }
+  .wrap:has(.graph-shell) > .legend::-webkit-scrollbar { display: none; }
+  .wrap:has(.graph-shell) > .legend .chip { padding: .34rem .58rem; font-size: .75rem;
+                                            white-space: nowrap; }
+  .graph-shell { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 1rem;
+                 order: 5; flex: 1; min-height: 0; }
+  .graph-wrap { --graph-ai:#5b6cf0; --graph-culture:#a45cd6; --graph-politics:#e05569;
+                --graph-finance:#d99a1c; --graph-health:#2faa6f; --graph-science:#2aa7bd;
+                --graph-other:#9aa0ab; position: relative; min-height: 0; height: 100%;
+                background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+                overflow: hidden; box-shadow: var(--shadow); }
+  .graph-wrap svg { width: 100%; height: 100%; display: block; }
+  .graph-fallback { position: absolute; inset: 0; z-index: 4; display: grid; place-items: center;
+                    padding: 2rem; text-align: center; background: var(--panel); color: var(--muted); }
+  .graph-fallback[hidden] { display: none; }
+  .graph-stats { position: absolute; left: .8rem; top: .8rem; z-index: 2; display: flex;
+                 gap: .35rem; flex-wrap: wrap; pointer-events: none; }
+  .graph-stats span { border: 1px solid var(--line); background: rgba(255,255,255,.92);
+                      border-radius: 999px; padding: .25rem .55rem; font-size: .72rem; }
+  .graph-zoom { position: absolute; left: .7rem; bottom: .7rem; z-index: 2; display: flex;
+                flex-direction: column; gap: 0; border-radius: 10px; overflow: hidden; }
+  .graph-zoom button { width: 2rem; height: 2rem; padding: 0; background: var(--panel);
+                       color: var(--ink); border: 1px solid var(--line-2); }
+  .graph-zoom button + button { border-top: 0; }
+  .graph-preview { min-height: 0; background: var(--panel); border: 1px solid var(--line);
+                   border-radius: var(--radius); padding: 1rem; box-shadow: var(--shadow);
+                   overflow: auto; }
+  .graph-preview-empty { height: 100%; display: flex; flex-direction: column; align-items: center;
+                         justify-content: center; text-align: center; gap: .45rem; }
+  .graph-user-mini { width: 58px; height: 58px; border-radius: 50%; display: grid;
+                     place-items: center; background: var(--accent-soft); color: var(--accent-ink);
+                     font-weight: 700; border: 1px solid #cbc7fa; }
+  .graph-preview-title { font-size: 1.05rem; font-weight: 700; color: var(--ink); }
+  .graph-preview h3 { margin-top: .25rem; }
+  .graph-preview .graph-path { color: var(--muted); font-size: .8rem; }
+  .graph-preview a { display: inline-block; margin-top: .8rem; font-weight: 600; }
+  .graph-panel-head { display: flex; align-items: center; justify-content: space-between;
+                      gap: .5rem; padding-bottom: .75rem; border-bottom: 1px solid var(--line); }
+  .graph-panel-theme { display: inline-flex; align-items: center; gap: .45rem; font-weight: 700; }
+  .graph-panel-theme i, .graph-neighbor i { width: .65rem; height: .65rem; border-radius: 50%;
+                                           background: var(--c); flex: 0 0 auto; }
+  .graph-path-card { border: 1px solid var(--line); background: #faf9f6; border-radius: 11px;
+                     padding: .65rem .7rem; margin: .8rem 0; font-size: .78rem; font-weight: 600; }
+  .graph-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: .45rem; margin: .8rem 0; }
+  .graph-metric { border: 1px solid var(--line); border-radius: 9px; padding: .45rem .55rem; }
+  .graph-metric small { display: block; color: var(--muted); text-transform: uppercase;
+                        font-size: .62rem; }
+  .graph-metric b { font-size: 1rem; }
+  .graph-neighbors h4 { margin: .8rem 0 .35rem; color: var(--muted); font-size: .68rem;
+                        text-transform: uppercase; letter-spacing: .05em; }
+  .graph-neighbor { display: flex; align-items: center; gap: .45rem; padding: .42rem .3rem;
+                    border-radius: 8px; font-size: .76rem; }
+  .graph-neighbor:first-of-type { background: var(--accent-soft); }
+  .graph-neighbor span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (max-width: 1120px) { .graph-shell { grid-template-columns: 1fr; }
+    .graph-preview { display: none; }
+    .graph-toolbar .graph-search { margin-left: 0; } }
+
   @media (max-width: 760px) {
     body { flex-direction: column; }
     .sidebar { position: static; width: auto; flex-direction: row; align-items: center;
-               padding: .6rem .8rem; gap: .2rem; overflow-x: auto; }
+               padding: .6rem .8rem; gap: .2rem; overflow-x: auto; scrollbar-width: none; }
+    .sidebar::-webkit-scrollbar { display: none; }
     .brand { padding: .2rem .5rem; font-size: 1.05rem; }
     .sidebar nav { flex-direction: row; }
     .sidebar nav a .ic { display: none; }
     .side-foot { display: none; }
     .content { margin-left: 0; padding: 1.4rem 1.1rem 3rem; }
+    .content:has(.graph-shell) { height: auto; min-height: calc(100vh - 79px);
+                                 overflow: visible; padding: 1rem; }
+    .wrap.wide:has(.graph-shell) { height: auto; }
+    .wrap:has(.graph-shell) > .legend { flex-wrap: wrap; overflow: visible; }
+    .graph-shell { flex: none; height: 340px; }
+    .graph-wrap { display: flex; flex-direction: column; }
+    .graph-wrap svg { height: auto; flex: 1; min-height: 0; }
+    .graph-stats { position: static; order: -1; padding: .7rem .7rem 0;
+                   pointer-events: none; }
   }
 </style>
 """
@@ -264,6 +357,7 @@ _NAV_ITEMS = [
     ("/ui/ask", "Ask", "✦"),
     ("/ui/categories", "Categories", "▤"),
     ("/ui/feed", "Feed", "▦"),
+    ("/ui/graph", "Graph", "◎"),
     ("/ui/taxonomy", "Taxonomy", "⚙"),
     ("/ui/refresh", "Sync", "↻"),
     ("/ui/import", "Import", "⤒"),
@@ -294,7 +388,8 @@ _ACTIVE_JS = (
     "var h=a.getAttribute('href');var p=location.pathname;"
     # exact match, or a true sub-path (h + '/'): plain prefix matching would light up
     # /ui/feed while on /ui/feedback.
-    "if(h===p||(h!=='/'&&p.indexOf(h+'/')===0))a.classList.add('active');});</script>"
+    "if(h===p||(h!=='/'&&p.indexOf(h+'/')===0)){a.classList.add('active');"
+    "if(innerWidth<=760)a.scrollIntoView({block:'nearest',inline:'center'});}});</script>"
 )
 
 # Row-major masonry: distribute cards (in DOM/chronological order) into the shortest column,
@@ -382,9 +477,186 @@ def page(title: str, body: str, wide: bool = False, rail: bool = False) -> HTMLR
     )
 
 
-def _avatar_src(url: str | None) -> str | None:
+def graph_visualization(fallback: str) -> str:
+    """Interactive, user-centered graph markup; the server fallback stays until D3 renders."""
+    return (
+        '<div class="graph-toolbar" data-component-id="graph-toolbar">'
+        '<button class="on" id="graph-centered">Centered</button>'
+        '<button id="graph-free">Free force</button>'
+        '<label for="graph-threshold">Similarity ≥ <b id="graph-threshold-value">0.50</b></label>'
+        '<input id="graph-threshold" type="range" min="0" max="100" value="50">'
+        '<button class="on" id="graph-edges" aria-pressed="true">Edges: on</button>'
+        '<button id="graph-reset">Reset</button><button id="graph-center">◎ Center on me</button>'
+        '<input class="graph-search" id="graph-search" type="search" '
+        'placeholder="Find a bookmark…" aria-label="Find a bookmark"></div>'
+        '<div class="graph-shell"><div id="graph" class="graph-wrap" data-src="/ui/graph/data" '
+        'data-node-types="user theme post" '
+        'data-edge-kinds="ownership theme similarity membership" '
+        'data-layout="user-centered" data-selection-path="post theme user">'
+        f'<div id="graph-fallback" class="graph-fallback">{fallback}</div>'
+        '<div class="graph-stats" id="graph-stats" aria-live="polite"></div>'
+        '<div class="graph-zoom" data-component-id="zoom-controls">'
+        '<button id="graph-zoom-in" aria-label="Zoom in">+</button>'
+        '<button id="graph-zoom-out" aria-label="Zoom out">−</button>'
+        '<button id="graph-fit" aria-label="Fit to screen">⛶</button></div></div>'
+        '<aside class="graph-preview" id="graph-preview">'
+        '<div class="graph-preview-empty"><div class="graph-user-mini">You</div>'
+        '<div class="graph-preview-title">Your knowledge graph</div>'
+        '<p class="muted">Every theme belongs to one connected personal library. Select a '
+        'bookmark to trace it through its theme hub back to you, then inspect its closest '
+        'semantic neighbors across the graph.</p></div></aside></div>'
+        '<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>'
+        + _GRAPH_JS
+    )
+
+
+_GRAPH_JS = r"""
+<script>(function(){
+var host=document.getElementById('graph'), fallback=document.getElementById('graph-fallback');
+if(!host||!window.d3){return;} // CDN failure deliberately leaves the server fallback visible.
+fetch('/ui/graph/data').then(function(r){if(!r.ok)throw new Error('graph data');return r.json();})
+.then(function(data){
+  var visible=data.nodes.filter(function(n){return n.type==='user'||n.type==='theme'||n.type==='post';});
+  var ids=new Set(visible.map(function(n){return n.id;}));
+  var rawLinks=data.edges.filter(function(e){return ids.has(e.source)&&ids.has(e.target)&&
+    (e.kind==='ownership'||e.kind==='theme'||e.kind==='similarity'||e.kind==='membership');});
+  var byId=new Map(visible.map(function(n){return[n.id,n];}));
+  var themeFor=new Map(), degree=new Map(), selected=null, edgesOn=true, threshold=.5;
+  rawLinks.forEach(function(e){
+    if(e.kind==='theme')themeFor.set(e.source,e.target);
+    if(e.kind==='similarity'){degree.set(e.source,(degree.get(e.source)||0)+1);
+      degree.set(e.target,(degree.get(e.target)||0)+1);}
+  });
+  var cross=rawLinks.filter(function(e){return e.kind==='similarity'&&
+    byId.get(e.source).parent!==byId.get(e.target).parent;}).sort(function(a,b){return (b.weight||0)-(a.weight||0);});
+  var strongestBridges=new Set(cross.slice(0,16));
+  var links=rawLinks.filter(function(e){return e.kind!=='similarity'||
+    byId.get(e.source).parent===byId.get(e.target).parent||strongestBridges.has(e);});
+  var bridges=strongestBridges.size;
+  document.getElementById('graph-stats').innerHTML='<span><b>'+data.meta.post_nodes+
+    '</b> bookmarks</span><span><b>'+data.meta.similarity_edges+'</b> links</span><span><b>'+bridges+'</b> bridges</span>';
+  var svg=d3.select(host).insert('svg',':first-child');
+  var w=svg.node().clientWidth,h=svg.node().clientHeight;
+  var scene=svg.append('g'), haloLayer=scene.append('g'), linkLayer=scene.append('g'), nodeLayer=scene.append('g');
+  var zoom=d3.zoom().scaleExtent([.25,5]).on('zoom',function(e){scene.attr('transform',e.transform);});
+  svg.call(zoom);
+  var themes=visible.filter(function(n){return n.type==='theme';});
+  var root=byId.get('user:me'), centered=true;
+  function radial(){
+    w=svg.node().clientWidth;h=svg.node().clientHeight;root.fx=w/2;root.fy=h/2;
+    var radius=w<500 ? Math.min(w,h)*.30 : Math.max(145,Math.min(w,h)*.31);
+    themes.forEach(function(n,i){var a=(Math.PI*2*i/themes.length)-Math.PI/2;
+      n.fx=w/2+Math.cos(a)*radius;n.fy=h/2+Math.sin(a)*radius;});
+  }
+  radial();
+  visible.filter(function(n){return n.type==='post';}).forEach(function(n,i){
+    var theme=byId.get(themeFor.get(n.id)),a=(i*2.399963229728653),r=28+(i%4)*12;
+    n.x=(theme?theme.fx:w/2)+Math.cos(a)*r;n.y=(theme?theme.fy:h/2)+Math.sin(a)*r;
+  });
+  var force=d3.forceSimulation(visible)
+    .force('link',d3.forceLink(links).id(function(d){return d.id;}).distance(function(e){
+      return e.kind==='ownership'?150:e.kind==='theme'?62:85;}).strength(function(e){
+      return e.kind==='ownership' ? .65 : e.kind==='theme' ? .2 : .11;}))
+    .force('charge',d3.forceManyBody().strength(function(n){return n.type==='post'?-34:-100;}))
+    .force('collide',d3.forceCollide().radius(function(n){return n.type==='user'?43:n.type==='theme'?30:8;}))
+    .force('x',d3.forceX(w/2).strength(.025)).force('y',d3.forceY(h/2).strength(.025));
+  var halo=haloLayer.selectAll('circle').data(themes).join('circle').attr('fill',function(d){return d.color;})
+    .attr('fill-opacity',.065).attr('stroke',function(d){return d.color;}).attr('stroke-opacity',.18)
+    .attr('stroke-dasharray','3 6').attr('r',function(d){return 54+Math.sqrt(d.count||1)*7;});
+  var path=linkLayer.selectAll('path').data(links).join('path').attr('fill','none')
+    .attr('stroke',function(e){if(e.kind==='ownership')return '#5b53e8';
+      if(e.kind==='theme')return (byId.get(e.target.id||e.target)||{}).color||'#c7c4bc';
+      return strongestBridges.has(e)?'#776ff0':'#9da0a8';})
+    .attr('stroke-width',function(e){return e.kind==='ownership' ? 1.8 : e.kind==='theme' ? .7 : .45+1.35*(e.weight||0);})
+    .attr('stroke-linecap','round');
+  var node=nodeLayer.selectAll('g').data(visible).join('g').attr('tabindex',0).attr('role','button')
+    .on('click',function(e,d){if(d.type==='post'){selected=d;renderSelection();}});
+  node.append('circle').attr('r',function(d){return d.type==='user'?34:d.type==='theme'?18:Math.min(10,4+Math.sqrt(degree.get(d.id)||0));})
+    .attr('fill',function(d){return d.type==='user'?'#fff':(d.color||'#9aa0ab');})
+    .attr('stroke',function(d){return d.type==='user'?'#5b53e8':'#fff';}).attr('stroke-width',function(d){return d.type==='user'?4:2;});
+  node.filter(function(d){return d.type!=='post';}).append('text').attr('text-anchor','middle')
+    .attr('y',function(d){return d.type==='user'?4:-27;}).attr('font-size',function(d){return d.type==='user'?14:(w<500?9:11);})
+    .attr('font-weight',700).attr('fill','#191a1e').text(function(d){return d.label;});
+  node.append('title').text(function(d){return d.label;});
+  function edgeId(v){return typeof v==='object'?v.id:v;}
+  function keepEdge(e){return edgesOn&&(e.kind!=='similarity'||(e.weight||0)>=threshold);}
+  function curve(e){var dx=e.target.x-e.source.x,dy=e.target.y-e.source.y,mx=(e.source.x+e.target.x)/2;
+    var my=(e.source.y+e.target.y)/2,bend=e.kind==='similarity' ? .12 : 0;
+    return 'M'+e.source.x+','+e.source.y+' Q'+(mx-dy*bend)+','+(my+dx*bend)+' '+e.target.x+','+e.target.y;}
+  function renderSelection(){
+    var active=new Set();
+    if(selected){active.add(selected.id);var theme=themeFor.get(selected.id);if(theme)active.add(theme);active.add('user:me');
+      links.forEach(function(e){if(e.kind==='similarity'&&(edgeId(e.source)===selected.id||edgeId(e.target)===selected.id)){
+        active.add(edgeId(e.source));active.add(edgeId(e.target));}});}
+    node.style('opacity',function(d){return !selected||active.has(d.id)?1:.16;})
+      .select('circle').attr('stroke-width',function(d){return selected&&active.has(d.id)?4:(d.type==='user'?4:2);});
+    path.style('opacity',function(e){if(!keepEdge(e))return 0;if(!selected)return e.kind==='ownership' ? .65 : e.kind==='theme' ? .16 : .25;
+      return active.has(edgeId(e.source))&&active.has(edgeId(e.target)) ? .9 : .025;});
+    var panel=document.getElementById('graph-preview');
+    if(!selected){panel.innerHTML='<div class="graph-preview-empty"><div class="graph-user-mini">You</div><div class="graph-preview-title">Your knowledge graph</div><p class="muted">Every theme belongs to one connected personal library. Select a bookmark to trace it through its theme hub back to you, then inspect its closest semantic neighbors across the graph.</p></div>';return;}
+    panel.textContent='';var themeNode=byId.get(themeFor.get(selected.id));
+    var head=document.createElement('div');head.className='graph-panel-head';
+    var themeLabel=document.createElement('span');themeLabel.className='graph-panel-theme';
+    var swatch=document.createElement('i');swatch.style.setProperty('--c',(themeNode&&themeNode.color)||'#9aa0ab');
+    themeLabel.appendChild(swatch);themeLabel.appendChild(document.createTextNode((themeNode&&themeNode.label)||'Other'));
+    var close=document.createElement('button');close.type='button';close.textContent='×';close.setAttribute('aria-label','Close preview');
+    close.onclick=function(){selected=null;renderSelection();};head.appendChild(themeLabel);head.appendChild(close);panel.appendChild(head);
+    var crumb=document.createElement('div');crumb.className='graph-path';crumb.textContent='Your library → '+(themeNode?themeNode.label:'Other');panel.appendChild(crumb);
+    var title=document.createElement('h3');title.textContent=selected.label||'Saved bookmark';panel.appendChild(title);
+    if(selected.url&&/^https?:\/\//i.test(selected.url)){var a=document.createElement('a');a.href=selected.url;a.target='_blank';a.rel='noopener';a.textContent='Open original ↗';panel.appendChild(a);}
+    var pathCard=document.createElement('div');pathCard.className='graph-path-card';pathCard.textContent='Bookmark → '+((themeNode&&themeNode.label)||'Theme')+' hub → You';panel.appendChild(pathCard);
+    var neighborLinks=links.filter(function(e){return e.kind==='similarity'&&(edgeId(e.source)===selected.id||edgeId(e.target)===selected.id);})
+      .sort(function(a,b){return (b.weight||0)-(a.weight||0);});
+    var metrics=document.createElement('div');metrics.className='graph-metrics';
+    metrics.innerHTML='<div class="graph-metric"><small>Theme fit</small><b>'+((neighborLinks[0]&&neighborLinks[0].weight)||0).toFixed(2)+'</b></div><div class="graph-metric"><small>Neighbors</small><b>'+neighborLinks.length+'</b></div>';panel.appendChild(metrics);
+    var related=document.createElement('div');related.className='graph-neighbors';var relatedTitle=document.createElement('h4');relatedTitle.textContent='Nearest semantic neighbors';related.appendChild(relatedTitle);
+    neighborLinks.slice(0,5).forEach(function(e){var id=edgeId(e.source)===selected.id?edgeId(e.target):edgeId(e.source),n=byId.get(id);if(!n)return;var row=document.createElement('div');row.className='graph-neighbor';var dot=document.createElement('i');dot.style.setProperty('--c',n.color||'#9aa0ab');var text=document.createElement('span');text.textContent=n.label;row.appendChild(dot);row.appendChild(text);related.appendChild(row);});panel.appendChild(related);
+  }
+  force.on('tick',function(){
+    halo.attr('cx',function(d){return d.x;}).attr('cy',function(d){return d.y;});
+    node.attr('transform',function(d){return 'translate('+d.x+','+d.y+')';});path.attr('d',curve);
+  });
+  function centerOnMe(animated){var t=d3.zoomIdentity.translate(w/2,h/2).scale(1).translate(-root.x,-root.y);
+    (animated?svg.transition().duration(450):svg).call(zoom.transform,t);}
+  function reset(){threshold=.5;document.getElementById('graph-threshold').value=50;
+    document.getElementById('graph-threshold-value').textContent='0.50';selected=null;edgesOn=true;
+    document.getElementById('graph-edges').classList.add('on');renderSelection();centerOnMe(true);force.alpha(1).restart();}
+  document.getElementById('graph-centered').onclick=function(){centered=true;radial();this.classList.add('on');document.getElementById('graph-free').classList.remove('on');force.alpha(.8).restart();};
+  document.getElementById('graph-free').onclick=function(){centered=false;themes.forEach(function(n){n.fx=null;n.fy=null;});root.fx=w/2;root.fy=h/2;this.classList.add('on');document.getElementById('graph-centered').classList.remove('on');force.alpha(1).restart();};
+  document.getElementById('graph-threshold').oninput=function(){threshold=Number(this.value)/100;document.getElementById('graph-threshold-value').textContent=threshold.toFixed(2);renderSelection();};
+  document.getElementById('graph-edges').onclick=function(){edgesOn=!edgesOn;this.classList.toggle('on',edgesOn);this.setAttribute('aria-pressed',String(edgesOn));renderSelection();};
+  document.getElementById('graph-reset').onclick=reset;document.getElementById('graph-center').onclick=function(){centerOnMe(true);};
+  document.getElementById('graph-zoom-in').onclick=function(){svg.transition().call(zoom.scaleBy,1.3);};
+  document.getElementById('graph-zoom-out').onclick=function(){svg.transition().call(zoom.scaleBy,.77);};document.getElementById('graph-fit').onclick=function(){centerOnMe(true);};
+  document.getElementById('graph-search').oninput=function(){var q=this.value.trim().toLowerCase();
+    node.style('opacity',function(d){return !q||d.type!=='post'||(d.label||'').toLowerCase().indexOf(q)>=0?1:.1;});};
+  window.addEventListener('resize',function(){if(centered)radial();else{w=svg.node().clientWidth;h=svg.node().clientHeight;root.fx=w/2;root.fy=h/2;}force.alpha(.4).restart();});
+  fallback.hidden=true;renderSelection();centerOnMe(false);
+}).catch(function(){fallback.hidden=false;});
+})();</script>
+"""
+
+
+def _safe_http_url(value: Any) -> str | None:
+    """Return a renderable absolute HTTP(S) URL, rejecting malformed and non-string values."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value or any(character.isspace() for character in value):
+        return None
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            return None
+    except ValueError:
+        return None
+    return value
+
+
+def _avatar_src(url: Any) -> str | None:
     # Bump X's 48px "_normal" avatar to the 73px "_bigger" for crisp retina display.
-    return url.replace("_normal.", "_bigger.") if url else url
+    safe = _safe_http_url(url)
+    return safe.replace("_normal.", "_bigger.") if safe else None
 
 
 def _media_imgs(media_json: Any) -> str:
@@ -394,20 +666,25 @@ def _media_imgs(media_json: Any) -> str:
         media = json.loads(media_json) if isinstance(media_json, str) else media_json
     except (ValueError, TypeError):
         return ""
-    imgs = "".join(
-        f'<a href="{esc(m["url"])}" target="_blank" rel="noopener">'
-        f'<img class="media" src="{esc(m["url"])}" alt="{esc(m.get("alt_text") or "")}" '
-        f'loading="lazy"></a>'
-        for m in media
-        if isinstance(m, dict) and m.get("url")
-    )
+    imgs = ""
+    for item in media:
+        if not isinstance(item, dict):
+            continue
+        url = _safe_http_url(item.get("url"))
+        if url:
+            imgs += (f'<a href="{esc(url)}" target="_blank" rel="noopener">'
+                     f'<img class="media" src="{esc(url)}" '
+                     f'alt="{esc(item.get("alt_text") or "")}" loading="lazy"></a>')
     return f'<div class="media-row">{imgs}</div>' if imgs else ""
 
 
 def post_card(p: dict[str, Any]) -> str:
     text = esc(p.get("text") or "")
-    handle = esc(p.get("handle") or "")
-    url = p.get("url")
+    raw_handle = p.get("handle")
+    handle = raw_handle.strip() if isinstance(raw_handle, str) else ""
+    url = _safe_http_url(p.get("url"))
+    raw_source = p.get("source")
+    source = raw_source if isinstance(raw_source, str) and raw_source else "x"
     color = parent_color(p.get("parent"))
     tint = (
         f' style="background:color-mix(in srgb,{color} 11%,var(--panel));'
@@ -421,17 +698,20 @@ def post_card(p: dict[str, Any]) -> str:
         if avatar
         else '<div class="avatar"></div>'
     )
-    if handle:
-        at = (f'<a class="handle" href="https://x.com/{handle}" target="_blank" '
-              f'rel="noopener">@{handle}</a>')
-    elif url:
+    author_base = (_SOURCE_META.get(source) or {}).get("author_base")
+    if handle and author_base:
+        author_url = author_base + quote(handle, safe="")
+        at = (f'<a class="handle" href="{esc(author_url)}" target="_blank" '
+              f'rel="noopener">@{esc(handle)}</a>')
+    elif source == "browser" and url:
         # Author-less post (browser bookmark): the site's domain is the closest thing to a byline.
-        domain = esc(urlsplit(url).netloc.lower().removeprefix("www."))
+        domain = esc((urlsplit(url).hostname or "").lower().removeprefix("www."))
         at = (f'<a class="handle" href="{esc(url)}" target="_blank" '
               f'rel="noopener">🌐 {domain}</a>')
     else:
         at = ""
-    head = f'<div class="head">{av}{at}</div>'
+    badge = esc(_SOURCE_LABELS.get(source, source.capitalize()))
+    head = f'<div class="head">{av}{at}<span class="badge">{badge}</span></div>'
     media = _media_imgs(p.get("media_json"))
     link = f'<a href="{esc(url)}" target="_blank" rel="noopener">open ↗</a>' if url else ""
     score = f'score {p["score"]:.2f} · ' if isinstance(p.get("score"), (int, float)) else ""

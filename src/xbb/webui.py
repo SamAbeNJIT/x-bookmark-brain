@@ -7,18 +7,20 @@ same `get_db` / `get_ai` dependencies. Kept in its own router so it barely touch
 from __future__ import annotations
 
 import json
+from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from . import (auth, authui, bookmarks, categorize, credits, ingestion, jobs, landing, mail,
-               storage, xapi, xauth, xconv)
+               sources, storage, xapi, xauth, xconv)
 from .ask import trim_history
 from .config import Config
 from .deps import get_ai, get_db, resolve_tenant
 from .log import logger
 from .search import posts_by_ids, search
-from .templates import esc, legend, md_lite, page, parent_color, post_card
+from .templates import (_SOURCE_LABELS, esc, graph_visualization, legend, md_lite, page,
+                        parent_color, post_card)
 
 ui_router = APIRouter()
 
@@ -67,7 +69,29 @@ def home(request: Request, con=Depends(get_db)):
             'href="/oauth/login"><b style="font-size:1rem">Connect X →</b>'
             '<span>authorize read access to your bookmarks</span></a></p>'
         )
+    body += _source_controls(con, cfg)
     return page("Your bookmark brain", body)
+
+
+def _source_controls(con, cfg: Config) -> str:
+    """Registry-driven Connect/Sync controls for configured non-X OAuth sources."""
+    blocks = []
+    for adapter in sources.configured_oauth_sources(cfg):
+        label = sources.source_label(adapter.name)
+        note = ("Reddit exposes only about the newest 1,000 saved items. "
+                if adapter.name == "reddit" else "")
+        if adapter.is_connected(con):
+            blocks.append(
+                f'<form method=post action="/ui/refresh/{adapter.name}"><button>↻ Sync {label}</button> '
+                f'<span class=muted>✓ connected · {note}unlimited and free</span></form>'
+            )
+        else:
+            blocks.append(
+                f'<p><a class="stat" style="display:inline-block;text-decoration:none" '
+                f'href="/connect/{adapter.name}/login"><b style="font-size:1rem">Connect {label} →</b>'
+                f'<span>{note}read-only saved-item access · unlimited and free</span></a></p>'
+            )
+    return "".join(blocks)
 
 
 @ui_router.get("/oauth/login")
@@ -169,17 +193,60 @@ def oauth_callback(request: Request, code: str = "", state: str = "", error: str
     return RedirectResponse(url="/ui/refresh", status_code=303)
 
 
+def _oauth_adapter_or_404(source: str, cfg: Config):
+    try:
+        return sources.get_oauth_adapter(source, cfg)
+    except sources.SourceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@ui_router.get("/connect/{source}/login")
+def source_oauth_login(source: str, request: Request, con=Depends(get_db)):
+    cfg = Config.from_env()
+    adapter = _oauth_adapter_or_404(source, cfg)
+    tenant_id = resolve_tenant(request, cfg)
+    state = sources.make_oauth_state(source, tenant_id, cfg.session_secret)
+    return RedirectResponse(adapter.authorize_url(cfg, con, state), status_code=307)
+
+
+@ui_router.get("/connect/{source}/callback")
+def source_oauth_callback(source: str, request: Request, code: str = "", state: str = "",
+                          error: str = "", con=Depends(get_db)):
+    cfg = Config.from_env()
+    adapter = _oauth_adapter_or_404(source, cfg)
+    tenant_id = resolve_tenant(request, cfg)
+    if error:
+        return page(f"Connect {source.title()}",
+                    f'<div class="answer">Connection denied: {esc(error)}</div>')
+    if not sources.verify_oauth_state(state, source, tenant_id, cfg.session_secret):
+        raise HTTPException(status_code=400, detail="OAuth state is invalid for this account")
+    try:
+        adapter.handle_callback(cfg, con, code, state)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return RedirectResponse("/ui/refresh", status_code=303)
+
+
 @ui_router.post("/ui/refresh")
 def ui_refresh_start(request: Request, con=Depends(get_db)):
     cfg = Config.from_env()
     # Import gate: sync is allowed while the account is under its entitlement (free slice +
     # purchased import_limit; None = unlimited). At the cap, send them to the billing slider.
-    cap = storage.effective_import_cap(con, cfg.free_bookmark_limit,
-                                       cfg.free_web_bookmark_limit)
+    cap = storage.effective_import_cap(con, cfg.free_bookmark_limit)
     if cap is not None:
         if storage.post_count(con, "x") >= cap:
             return RedirectResponse(url="/ui/billing", status_code=303)
     jobs.start(resolve_tenant(request, cfg))  # sync runs under THIS user's tenant
+    return RedirectResponse(url="/ui/refresh", status_code=303)
+
+
+@ui_router.post("/ui/refresh/{source}")
+def ui_refresh_source(source: str, request: Request):
+    try:
+        sources.get_adapter(source)
+    except sources.SourceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    jobs.start_source(resolve_tenant(request, Config.from_env()), source)
     return RedirectResponse(url="/ui/refresh", status_code=303)
 
 
@@ -244,7 +311,7 @@ def ui_refresh(request: Request, con=Depends(get_db)):
             'href="/oauth/login"><b style="font-size:1rem">Connect X →</b>'
             "<span>official sign-in, read-only bookmark access</span></a></p>"
         )
-        return page("Sync", state)  # no sync button until connected
+        return page("Sync", state + _source_controls(con, cfg))  # no X sync button until connected
     elif first_run:
         state = (
             f"<p class=lead>🎉 You're connected. Sync your <b>{cfg.free_bookmark_limit} most "
@@ -260,10 +327,11 @@ def ui_refresh(request: Request, con=Depends(get_db)):
     )
     note = (
         "<p class=muted style='margin-top:1.4rem'>Incremental — it stops as soon as it "
-        "reaches bookmarks already synced, so it only fetches what's new. Beyond your "
-        "free slice, each new bookmark uses one import (1¢).</p>"
+        "reaches bookmarks already synced, so it only fetches what's new. For X only, "
+        "bookmarks beyond your free slice use one import each (1¢). Browser, Reddit, and "
+        "GitHub remain unlimited and free.</p>"
     )
-    return page("Sync", state + form + note)
+    return page("Sync", state + form + _source_controls(con, cfg) + note)
 
 
 # --------------------------------------------------------------------- browser import
@@ -273,7 +341,6 @@ MAX_IMPORT_UPLOAD_BYTES = 10 * 1024 * 1024  # a 20k-bookmark export is ~5 MB; 10
 
 def _import_body(con, cfg: Config, error: str | None = None, notice: str | None = None) -> str:
     used = storage.post_count(con, "browser")
-    cap = cfg.free_web_bookmark_limit
     msg = ""
     if error:
         msg = f'<div class="answer" style="border-left-color:#d64545">⚠️ {esc(error)}</div>'
@@ -282,8 +349,7 @@ def _import_body(con, cfg: Config, error: str | None = None, notice: str | None 
     return (
         "<p class=lead>Bring the rest of your saved web: upload your browser's bookmark "
         "export and it gets embedded, labeled and searchable alongside your X bookmarks. "
-        f"Your first <b>{cap:,} are free</b>; beyond that each bookmark uses one import "
-        "(1¢) from your balance.</p>"
+        "Browser bookmark imports are <b>unlimited and free</b> and never use your X imports.</p>"
         + msg +
         '<h3>1 · Export from your browser</h3>'
         "<p><b>Chrome</b> — <span class=muted>⋮ menu → Bookmarks and lists → Bookmark "
@@ -295,8 +361,8 @@ def _import_body(con, cfg: Config, error: str | None = None, notice: str | None 
         '<form method=post action="/ui/import" enctype="multipart/form-data" class=row>'
         '<input type=file name=file accept=".html,.htm,text/html" required>'
         "<button>Import bookmarks</button></form>"
-        f"<p class=muted style='margin-top:1.2rem'>{used:,} of {cap:,} free browser "
-        "bookmarks used · re-uploading is safe (already-imported links are skipped) · "
+        f"<p class=muted style='margin-top:1.2rem'>{used:,} browser bookmarks imported · "
+        "re-uploading is safe (already-imported links are skipped) · "
         "folders are kept as context for the AI labeling.</p>"
     )
 
@@ -331,28 +397,16 @@ def ui_import_post(request: Request, file: UploadFile = File(...), con=Depends(g
     if not fresh:
         return page("Import", _import_body(con, cfg, notice=f"All {len(parsed):,} bookmarks in "
                     "that file are already in your library — nothing new to import."))
-    # First free_web_bookmark_limit are free; beyond that, each browser bookmark draws one
-    # import from the SHARED rolling balance (2026-07-15: "500 free, then 1¢").
-    remaining_free = max(0, cfg.free_web_bookmark_limit - len(existing))
-    avail = storage.imports_available(con, cfg.free_bookmark_limit, cfg.free_web_bookmark_limit)
-    allowed = len(fresh) if avail is None else remaining_free + avail
-    if allowed == 0:
-        return page("Import", _import_body(con, cfg, error=(
-            f"Your free {cfg.free_web_bookmark_limit:,} browser bookmarks are used and your "
-            "imports balance is empty — top up on the billing page (1¢ per bookmark) and "
-            "upload again.")))
-    # Over the cap, keep the NEWEST saves — they're the ones people search for.
+    # Browser is unlimited/free. Sorting still gives deterministic newest-first rank assignment.
     fresh.sort(key=lambda b: b.get("add_date") or 0, reverse=True)
-    over_cap = max(0, len(fresh) - allowed)
-    kept = fresh[:allowed]
+    kept = fresh
 
     base = con.execute("SELECT COALESCE(MAX(bm_rank), 0) FROM posts").fetchone()[0]
     for rec in bookmarks.to_records(kept, base):
         ingestion._upsert_post(con, rec)
     con.commit()
     tenant = resolve_tenant(request, cfg)
-    logger.info("import.web tenant=%s imported=%d dup=%d over_cap=%d",
-                tenant, len(kept), dup, over_cap)
+    logger.info("import.web tenant=%s imported=%d dup=%d", tenant, len(kept), dup)
     jobs.start_enrich(tenant, len(kept))  # embed + label in the background
     return RedirectResponse(url="/ui/refresh", status_code=303)  # existing progress page
 
@@ -856,6 +910,26 @@ def ui_categories(con=Depends(get_db)):
     return page("Categories", body)
 
 
+@ui_router.get("/ui/graph")
+def ui_graph(con=Depends(get_db)):
+    tree = categorize.category_tree(con)
+    groups = [(group["parent"], group["total"]) for group in tree if group["total"]]
+    total = storage.post_count(con)
+    fallback = (
+        '<div><b>Your library is ready to map.</b><br>'
+        f'{total:,} bookmarks will appear around their theme communities when the '
+        'interactive graph loads.<noscript><br>JavaScript is required for the interactive '
+        'view; your library data remains available in Feed and Categories.</noscript></div>'
+    )
+    body = (
+        '<p class="lead">Your bookmarks form one connected network rooted on you, with radial '
+        'theme communities and semantic bridges between ideas.</p>'
+        + legend(groups)
+        + graph_visualization(fallback)
+    )
+    return page("Your knowledge graph", body, wide=True)
+
+
 _PAGE = 150
 
 
@@ -885,10 +959,9 @@ def _card_view(request: Request, view: str, base: str, qs: str = ""):
 
 # Feed source chips: friendly labels for known adapters; unknown future sources fall back
 # to a capitalized name automatically, so new adapters appear with zero UI work.
-_SOURCE_LABELS = {"x": "𝕏 X", "browser": "🌐 Web"}
-
-
-def _source_chips(con, active_source: str, qs: str) -> tuple[str, str]:
+def _source_chips(
+    con, active_source: str, query: dict[str, str]
+) -> tuple[str, str]:
     """Right-aligned source filter (All / 𝕏 / 🌐 / …) mirroring the category legend: chips
     are data-driven from the sources actually present, with counts. Hidden while the library
     is single-source. Returns (chips_html, validated_source)."""
@@ -898,10 +971,13 @@ def _source_chips(con, active_source: str, qs: str) -> tuple[str, str]:
     source = active_source if active_source in known else ""
     if len(rows) < 2:
         return "", source
-    chips = [f'<a href="/ui/feed?{qs.lstrip("&")}" class="{"on" if not source else ""}">All</a>']
+    all_query = urlencode(query)
+    all_href = "/ui/feed" + (f"?{all_query}" if all_query else "")
+    chips = [f'<a href="{esc(all_href)}" class="{"on" if not source else ""}">All</a>']
     for s, n in rows:
         label = _SOURCE_LABELS.get(s, s.capitalize())
-        chips.append(f'<a href="/ui/feed?source={s}{qs}" '
+        href = "/ui/feed?" + urlencode({"source": s, **query})
+        chips.append(f'<a href="{esc(href)}" '
                      f'class="{"on" if source == s else ""}">{label} '
                      f'<span class=muted>{n:,}</span></a>')
     return ('<div class="view-toggle" style="margin-right:.8rem">' + "".join(chips) + "</div>",
@@ -912,7 +988,9 @@ def _source_chips(con, active_source: str, qs: str) -> tuple[str, str]:
 def ui_feed(request: Request, parent: str = "", offset: int = 0, partial: int = 0,
             view: str = "", source: str = "", con=Depends(get_db)):
     active = parent or None
-    src = source if source in ("x", "browser") or not source else ""
+    filter_query = ({"parent": active} if active else {})
+    chip_query = {**filter_query, **({"view": view} if view else {})}
+    chips, src = _source_chips(con, source, chip_query)
     posts = categorize.feed_posts(con, parent=active, limit=_PAGE, offset=offset,
                                   source=src or None)
 
@@ -920,9 +998,9 @@ def ui_feed(request: Request, parent: str = "", offset: int = 0, partial: int = 
     if partial:
         return HTMLResponse("".join(post_card(p) for p in posts))
 
-    qs = (f"&parent={active}" if active else "")
-    chips, src = _source_chips(con, src, qs + (f"&view={view}" if view else ""))
-    qs_view = qs + (f"&source={src}" if src else "")
+    view_query = {**filter_query, **({"source": src} if src else {})}
+    encoded_view_query = urlencode(view_query)
+    qs_view = f"&{encoded_view_query}" if encoded_view_query else ""
     toggle, cards_class, respond = _card_view(request, view, "/ui/feed", qs_view)
 
     groups = [(g["parent"], g["total"]) for g in categorize.category_tree(con)]

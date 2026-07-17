@@ -1,4 +1,4 @@
-"""Browser-bookmark import: upload route, idempotency, cap, and X-entitlement isolation.
+"""Browser-bookmark import: upload route, idempotency, unlimited access, and X isolation.
 
 DB-gated like the other integration suites (skips without DATABASE_URL). The enrich job is
 monkeypatched out — embedding/labeling has its own tests; here we assert what lands in posts.
@@ -83,52 +83,37 @@ def _make_free(dsn, import_limit=0):
     con.close()
 
 
-def test_cap_clamps_to_newest_saves(client, seeded_db, no_enrich, monkeypatch):
-    monkeypatch.setenv("FREE_WEB_BOOKMARK_LIMIT", "2")
-    _make_free(seeded_db)  # comped accounts bypass caps entirely; the cap needs a free acct
+def test_browser_import_is_unlimited_for_free_accounts(client, seeded_db, no_enrich):
+    _make_free(seeded_db)
     r = _upload(client)
     assert r.status_code == 303
     con = storage.connect(seeded_db)
     try:
-        assert storage.post_count(con, "browser") == 2
-        # newest ADD_DATEs in the chrome fixture: the duplicate-save asyncio (1700000500 →
-        # collapsed to first save) — kept set is the 2 most recent distinct saves
-        urls = {r[0] for r in con.execute(
-            "SELECT url FROM posts WHERE source = 'browser'").fetchall()}
-        assert "https://example.com/recipe" in urls          # ADD_DATE 1700000600, newest
-        assert "https://www.postgresql.org/docs/" in urls    # 1700000300, second-newest
+        assert storage.post_count(con, "browser") == 4
     finally:
         con.close()
 
 
-def test_browser_overflow_consumes_shared_imports_balance(client, seeded_db, no_enrich,
-                                                          monkeypatch):
-    """2026-07-15: first 500 browser bookmarks free, then 1¢ each from the SHARED rolling
-    balance — and what browser overflow uses is no longer available to the X side."""
-    monkeypatch.setenv("FREE_WEB_BOOKMARK_LIMIT", "2")
-    _make_free(seeded_db, import_limit=1)   # bought 1 import; chrome fixture has 4 fresh
+def test_browser_import_never_consumes_x_import_balance(client, seeded_db, no_enrich):
+    _make_free(seeded_db, import_limit=1)
     _upload(client)
     con = storage.connect(seeded_db)
     try:
-        assert storage.post_count(con, "browser") == 3        # 2 free + 1 from the balance
-        assert storage.imports_available(con, 100, 2) == 0    # pool drained
-        # the X cap shrank by the browser overage: free 100 + max(0, 1 - 1) = 100
-        assert storage.effective_import_cap(con, 100, 2) == 100
+        assert storage.post_count(con, "browser") == 4
+        assert storage.imports_available(con, 100) == 1
+        assert storage.effective_import_cap(con, 100) == 101
     finally:
         con.close()
 
 
-def test_browser_upload_blocked_when_free_used_and_balance_empty(client, seeded_db,
-                                                                 no_enrich, monkeypatch):
-    monkeypatch.setenv("FREE_WEB_BOOKMARK_LIMIT", "2")
-    _make_free(seeded_db)                    # no balance at all
-    _upload(client)                          # fills the free 2
+def test_browser_upload_continues_with_empty_x_balance(client, seeded_db, no_enrich):
+    _make_free(seeded_db)
+    _upload(client)
     r = _upload(client, "firefox_bookmarks.html")
-    assert r.status_code == 200
-    assert "imports balance is empty" in r.text
+    assert r.status_code == 303
     con = storage.connect(seeded_db)
     try:
-        assert storage.post_count(con, "browser") == 2  # nothing beyond the free slice
+        assert storage.post_count(con, "browser") > 4
     finally:
         con.close()
 
@@ -149,6 +134,18 @@ def test_feed_source_filter_and_chips(client, seeded_db, no_enrich, fake_ai):
     x_only = client.get("/ui/feed?source=x").text
     assert "postgresql.org" not in x_only               # browser cards filtered out
     assert "RAG evaluation" in x_only
+
+
+def test_feed_accepts_data_driven_future_source(client, seeded_db, fake_ai):
+    from xbb import categorize
+    con = storage.connect(seeded_db)
+    con.execute("INSERT INTO posts (id, source, text, bm_rank) VALUES ('future-1', 'future', 'future saved item', 999)")
+    categorize.save_taxonomy(con, [{"name": "RAG"}])
+    categorize.assign_unassigned(con, fake_ai)
+    con.close()
+    response = client.get("/ui/feed?source=future")
+    assert "Future" in response.text and "future saved item" in response.text
+    assert "RAG evaluation" not in response.text
 
 
 def test_browser_imports_do_not_consume_x_entitlement(client, seeded_db, no_enrich,

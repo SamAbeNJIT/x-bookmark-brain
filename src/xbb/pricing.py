@@ -1,11 +1,11 @@
 """Pricing math for imports and credits — pure, no Stripe, no DB, fully unit-testable.
 
 IMPORTS (2026-07-13 pivot, third billing model): buyers purchase a dollar amount ($5-$200) of
-prepaid "imports" — 1 import brings 1 saved item into the library (bookmarks today; the unit
-is deliberately source-vague for future sources). The balance (accounts.import_limit) is
-ADDITIVE on top of the free slice and ROLLS OVER: unused imports cover whatever the user
-saves next, so paying customers never re-hit a $-minimum paywall for a handful of new
-bookmarks. No auto-refund (the 2026-07-10 true-up model is retired); refunds are on request
+prepaid X "imports" — 1 import brings 1 X bookmark into the library. The balance
+(accounts.import_limit) is ADDITIVE on top of the free X slice and ROLLS OVER: unused imports
+cover future X saves, so paying customers never re-hit a $-minimum paywall for a handful of
+new X bookmarks. Non-X sources are unlimited/free and never touch this balance. No auto-refund
+(the 2026-07-10 true-up model is retired); refunds are on request
 via support.
 """
 

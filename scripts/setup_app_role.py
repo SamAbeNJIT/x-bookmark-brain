@@ -9,9 +9,9 @@ init_db), and writes APP_DATABASE_URL into .env. Run once:
 
 from __future__ import annotations
 
-import re
 import secrets
 from pathlib import Path
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import psycopg
 from dotenv import load_dotenv
@@ -24,12 +24,13 @@ ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
 
 def _app_dsn(owner_dsn: str, password: str, dbname: str | None = None) -> str:
-    prefix, rest = owner_dsn.split("://", 1)
-    _userinfo, hostpart = rest.split("@", 1)
-    dsn = f"{prefix}://{storage.APP_ROLE}:{password}@{hostpart}"
-    if dbname:
-        dsn = re.sub(r"/[^/?]+\?", f"/{dbname}?", dsn, count=1)
-    return dsn
+    parsed = urlsplit(owner_dsn)
+    host = f"[{parsed.hostname}]" if ":" in (parsed.hostname or "") else parsed.hostname
+    if parsed.port:
+        host += f":{parsed.port}"
+    netloc = f"{quote(storage.APP_ROLE)}:{quote(password, safe='')}@{host}"
+    dsn = urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+    return storage.replace_database_name(dsn, dbname) if dbname else dsn
 
 
 def _write_env(key: str, value: str) -> None:
@@ -43,7 +44,8 @@ def main() -> int:
     load_dotenv()
     import os
     owner = os.environ["DATABASE_URL"]
-    test_owner = re.sub(r"/[^/?]+\?", "/neondb_test?", owner, count=1)
+    test_owner = storage.replace_database_name(owner)
+    storage.assert_distinct_database_urls(owner, test_owner)
     password = secrets.token_urlsafe(24)
 
     with psycopg.connect(owner, autocommit=True) as con:
@@ -61,7 +63,7 @@ def main() -> int:
     # Apply grants in both databases (init_db's _apply_grants now sees the role).
     storage.init_db(owner, DEFAULT_TENANT_ID)
     storage.init_db(test_owner, DEFAULT_TENANT_ID)
-    print("grants applied in neondb + neondb_test")
+    print(f"grants applied in development + {storage.TEST_DATABASE_NAME}")
 
     app_dsn = _app_dsn(owner, password)
     _write_env("APP_DATABASE_URL", app_dsn)

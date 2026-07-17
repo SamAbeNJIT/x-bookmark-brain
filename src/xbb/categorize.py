@@ -87,7 +87,7 @@ CONFIDENCE_MIN = 0.5
 
 def _confident(labels: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Keep only labels at or above CONFIDENCE_MIN."""
-    return [l for l in labels if l.get("confidence", 1.0) >= CONFIDENCE_MIN]
+    return [label for label in labels if label.get("confidence", 1.0) >= CONFIDENCE_MIN]
 
 
 def _labelable(text: str | None) -> bool:
@@ -296,10 +296,10 @@ def posts_in_category(con: psycopg.Connection, category_id: int) -> list[dict[st
     parent = row[0] if row else None
     return [
         {"id": r[0], "url": r[1], "text": r[2], "handle": r[3],
-         "avatar_url": r[4], "media_json": r[5], "parent": parent}
+         "avatar_url": r[4], "media_json": r[5], "parent": parent, "source": r[6]}
         for r in con.execute(
             """
-            SELECT p.id, p.url, p.text, au.handle, au.avatar_url, p.media_json
+            SELECT p.id, p.url, p.text, au.handle, au.avatar_url, p.media_json, p.source
             FROM posts p
             JOIN assignments a ON a.tenant_id = p.tenant_id AND a.post_id = p.id
             LEFT JOIN authors au ON au.tenant_id = p.tenant_id AND au.id = p.author_id
@@ -324,10 +324,10 @@ def posts_unlabeled(con: psycopg.Connection, limit: int = 600) -> list[dict[str,
     """Posts with no category assignment, newest-saved first — the 'Unlabeled' bucket."""
     return [
         {"id": r[0], "url": r[1], "text": r[2], "handle": r[3],
-         "avatar_url": r[4], "media_json": r[5], "parent": None}
+         "avatar_url": r[4], "media_json": r[5], "parent": None, "source": r[6]}
         for r in con.execute(
             """
-            SELECT p.id, p.url, p.text, au.handle, au.avatar_url, p.media_json
+            SELECT p.id, p.url, p.text, au.handle, au.avatar_url, p.media_json, p.source
             FROM posts p
             LEFT JOIN assignments a ON a.tenant_id = p.tenant_id AND a.post_id = p.id
             LEFT JOIN authors au ON au.tenant_id = p.tenant_id AND au.id = p.author_id
@@ -354,7 +354,8 @@ def feed_posts(
     # DISTINCT ON (p.id) shows a post once even if it's in several categories of the group.
     inner = """
         SELECT DISTINCT ON (p.id)
-               p.id, p.url, p.text, au.handle, au.avatar_url, p.media_json, c.parent, p.bm_rank
+               p.id, p.url, p.text, au.handle, au.avatar_url, p.media_json, c.parent,
+               p.source, p.bm_rank
         FROM posts p
         JOIN assignments a ON a.tenant_id = p.tenant_id AND a.post_id = p.id
         JOIN categories c ON c.id = a.category_id
@@ -369,7 +370,7 @@ def feed_posts(
         params.append(source)
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     sql = (
-        "SELECT id, url, text, handle, avatar_url, media_json, parent FROM ("
+        "SELECT id, url, text, handle, avatar_url, media_json, parent, source FROM ("
         + inner + where + " ORDER BY p.id, p.bm_rank DESC"
         + ") s ORDER BY bm_rank DESC LIMIT %s OFFSET %s"
     )
@@ -377,6 +378,6 @@ def feed_posts(
     rows = con.execute(sql, params)
     return [
         {"id": r[0], "url": r[1], "text": r[2], "handle": r[3],
-         "avatar_url": r[4], "media_json": r[5], "parent": r[6]}
+         "avatar_url": r[4], "media_json": r[5], "parent": r[6], "source": r[7]}
         for r in rows
     ]

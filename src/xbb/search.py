@@ -72,7 +72,7 @@ def posts_by_ids(con: psycopg.Connection, ids: list[str]) -> list[dict[str, Any]
         return []
     rows = con.execute(
         """
-        SELECT p.id, p.url, p.text, a.handle, a.avatar_url, p.media_json, c.parent
+        SELECT p.id, p.url, p.text, a.handle, a.avatar_url, p.media_json, c.parent, p.source
         FROM posts p
         LEFT JOIN authors a ON a.tenant_id = p.tenant_id AND a.id = p.author_id
         LEFT JOIN LATERAL (
@@ -89,7 +89,7 @@ def posts_by_ids(con: psycopg.Connection, ids: list[str]) -> list[dict[str, Any]
     ).fetchall()
     by_id = {
         r[0]: {"id": r[0], "url": r[1], "text": r[2], "handle": r[3], "avatar_url": r[4],
-               "media_json": r[5], "parent": r[6]}
+               "media_json": r[5], "parent": r[6], "source": r[7]}
         for r in rows
     }
     return [by_id[i] for i in ids if i in by_id]
@@ -125,7 +125,8 @@ def search(con: psycopg.Connection, ai: AIClient, query: str, k: int = 10) -> li
                    COALESCE(1.0 / (60 + v.r), 0) + COALESCE(1.0 / (60 + l.r), 0) AS rrf
             FROM vec v FULL OUTER JOIN lex l ON l.id = v.id
         )
-        SELECT p.id, p.url, p.text, a.handle, a.avatar_url, p.media_json, c.parent, f.rrf
+        SELECT p.id, p.url, p.text, a.handle, a.avatar_url, p.media_json, c.parent, f.rrf,
+               p.source
         FROM fused f
         JOIN posts p ON p.id = f.id
         LEFT JOIN authors a ON a.tenant_id = p.tenant_id AND a.id = p.author_id
@@ -147,6 +148,7 @@ def search(con: psycopg.Connection, ai: AIClient, query: str, k: int = 10) -> li
     top = float(rows[0][7])  # ORDER BY rrf DESC -> first row holds the max
     return [
         {"id": r[0], "url": r[1], "text": r[2], "handle": r[3], "avatar_url": r[4],
-         "media_json": r[5], "parent": r[6], "score": float(r[7]) / top}
+         "media_json": r[5], "parent": r[6], "score": float(r[7]) / top,
+         "source": r[8]}
         for r in rows
     ]

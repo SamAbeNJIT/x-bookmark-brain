@@ -27,6 +27,14 @@ A personal, single-user, locally-run web app that:
 The win condition: I type a plain-language query and reliably pull up a post that X's
 keyword search never could.
 
+### Phase 2: shared-source library
+
+Reddit saved posts/comments and GitHub starred repositories now enter the same normalization,
+embedding, taxonomy, feed, search, Ask, and graph pipeline as X and browser bookmarks. Source
+adapters namespace provider IDs and use tenant-bound OAuth tokens. Only X is metered; browser,
+Reddit, GitHub, and future non-X adapters are unlimited and free. RSS and email newsletters are
+documented adapter-roadmap items, not Phase 2 runtime features.
+
 ## User Stories
 
 1. As a user, I want to run a one-time backfill that pulls my full X bookmark history, so that my whole backlog is captured without manual copy-paste.

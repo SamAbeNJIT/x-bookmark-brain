@@ -1,6 +1,6 @@
 """Shared test fixtures: an isolated Neon test DB, a fake AI client, and a wired TestClient.
 
-Tests run against a dedicated ``neondb_test`` database (created on the same Neon project) so
+Tests run against a dedicated ``xbookmarkbrain_test`` database so
 they never touch real data and can truncate freely. The fake AI implements the full
 ``AIClient`` interface deterministically so logic and endpoints are tested without any live X
 or Bedrock call.
@@ -26,6 +26,8 @@ load_dotenv()  # tests need DATABASE_URL from .env (the CLI/app load it themselv
 # Pure-logic tests (auth, parsing, PKCE) run without a database; DB-backed tests skip cleanly
 # when DATABASE_URL is absent (e.g. a GitHub-only checkout with no Neon access).
 _HAVE_DB = bool(os.environ.get("DATABASE_URL"))
+_DEVELOPMENT_DSN = os.environ.get("DATABASE_URL")
+_APP_DEVELOPMENT_DSN = os.environ.get("APP_DATABASE_URL")
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -38,9 +40,16 @@ def load(name: str) -> dict:
     return json.loads((FIXTURES / name).read_text())
 
 
+def _derive_test_dsn(development: str) -> str:
+    """Derive and validate the isolated test DSN from any development-role URL."""
+    test = storage.replace_database_name(development)
+    storage.assert_distinct_database_urls(development, test)
+    return test
+
+
 def _test_dsn() -> str:
-    """The isolated test database DSN, derived from DATABASE_URL by swapping the db name."""
-    return os.environ["DATABASE_URL"].replace("/neondb?", "/neondb_test?")
+    """The isolated owner-role test DSN."""
+    return _derive_test_dsn(_DEVELOPMENT_DSN)
 
 
 class FakeAI:
@@ -104,15 +113,17 @@ class FakeClient:
 
 @pytest.fixture(scope="session", autouse=True)
 def _ensure_test_db():
-    """Create neondb_test (once) and apply the schema before any test runs."""
+    """Create xbookmarkbrain_test (once) and apply the schema before any test runs."""
     if not _HAVE_DB:
         yield
         return
     real = os.environ["DATABASE_URL"]
+    test_dsn = _test_dsn()  # includes the fail-closed identity assertion
     with psycopg.connect(real, autocommit=True) as c:
-        if not c.execute("SELECT 1 FROM pg_database WHERE datname='neondb_test'").fetchone():
-            c.execute("CREATE DATABASE neondb_test")
-    storage.init_db(_test_dsn(), DEFAULT_TENANT_ID)
+        if not c.execute("SELECT 1 FROM pg_database WHERE datname=%s",
+                         (storage.TEST_DATABASE_NAME,)).fetchone():
+            c.execute(f'CREATE DATABASE "{storage.TEST_DATABASE_NAME}"')
+    storage.init_db(test_dsn, DEFAULT_TENANT_ID)
     yield
 
 
@@ -123,9 +134,9 @@ def _point_at_test_db(monkeypatch):
         monkeypatch.setenv("DATABASE_URL", _test_dsn())
         # CRITICAL: also repoint the app-role DSN — jobs.start()/deps connect via APP_DATABASE_URL
         # directly, and leaving it on prod let a gate test trigger REAL prod syncs from the suite.
-        app = os.environ.get("APP_DATABASE_URL")
+        app = _APP_DEVELOPMENT_DSN
         if app:
-            monkeypatch.setenv("APP_DATABASE_URL", app.replace("/neondb?", "/neondb_test?"))
+            monkeypatch.setenv("APP_DATABASE_URL", _derive_test_dsn(app))
     # Never touch real KMS/SES from the suite — use plaintext tokens + console magic links.
     monkeypatch.delenv("KMS_KEY_ID", raising=False)
     monkeypatch.delenv("SES_SENDER", raising=False)
@@ -145,6 +156,7 @@ def db() -> str:
     if not _HAVE_DB:
         pytest.skip("DATABASE_URL not set — skipping DB-backed test")
     test_dsn = _test_dsn()
+    storage.assert_distinct_database_urls(_DEVELOPMENT_DSN, test_dsn)
     con = storage.connect(test_dsn, DEFAULT_TENANT_ID)
     for t in _TABLES:
         con.execute(f"TRUNCATE {t} CASCADE")
@@ -162,10 +174,10 @@ def db() -> str:
 @pytest.fixture
 def app_db(db) -> str:
     """Restricted-role DSN for the test DB (RLS enforced). Skips if the app role isn't set up."""
-    app = os.environ.get("APP_DATABASE_URL")
+    app = _APP_DEVELOPMENT_DSN
     if not app:
         pytest.skip("APP_DATABASE_URL not set — run scripts/setup_app_role.py")
-    return app.replace("/neondb?", "/neondb_test?")
+    return _derive_test_dsn(app)
 
 
 @pytest.fixture
