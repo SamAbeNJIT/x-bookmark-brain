@@ -9,6 +9,7 @@ from __future__ import annotations
 import html
 import json
 import re
+import zlib
 from typing import Any
 from urllib.parse import quote, urlsplit
 
@@ -152,6 +153,8 @@ _STYLE = """
   .post .head { display: flex; align-items: center; gap: .6rem; margin-bottom: .6rem; }
   .avatar { width: 40px; height: 40px; border-radius: 50%; object-fit: cover;
             background: #e7e4dc; flex: 0 0 auto; }
+  .avatar.letter { display: flex; align-items: center; justify-content: center;
+                   color: #fff; font-weight: 700; font-size: 1.05rem; user-select: none; }
   .handle { font-weight: 600; color: var(--ink); font-size: .95rem; }
   .handle:hover { color: var(--accent-ink); }
   .post .body { white-space: pre-wrap; font-size: .98rem; }
@@ -716,6 +719,21 @@ def _avatar_src(url: Any) -> str | None:
     return safe.replace("_normal.", "_bigger.") if safe else None
 
 
+# Reuses the parent-group palette (minus gray) so letter avatars feel native to the feed.
+_LETTER_AVATAR_COLORS = [c for p, c in PARENT_COLORS.items() if p != "Other"]
+
+
+def _letter_avatar(seed: str) -> str:
+    """Deterministic colored initial for cards without a profile image (web/Reddit/GitHub).
+
+    Same seed → same color, across processes (crc32, not hash()). Rendered entirely from
+    our origin — no third-party favicon services, which would leak library domains.
+    """
+    letter = next((ch for ch in seed if ch.isalnum()), "•").upper()
+    color = _LETTER_AVATAR_COLORS[zlib.crc32(seed.encode()) % len(_LETTER_AVATAR_COLORS)]
+    return f'<div class="avatar letter" style="background:{color}">{esc(letter)}</div>'
+
+
 def _media_imgs(media_json: Any) -> str:
     if not media_json:
         return ""
@@ -750,23 +768,25 @@ def post_card(p: dict[str, Any]) -> str:
         else ""
     )
     avatar = _avatar_src(p.get("avatar_url"))
-    av = (
-        f'<img class="avatar" src="{esc(avatar)}" alt="" loading="lazy">'
-        if avatar
-        else '<div class="avatar"></div>'
-    )
     author_base = (_SOURCE_META.get(source) or {}).get("author_base")
+    domain = ""
     if handle and author_base:
         author_url = author_base + quote(handle, safe="")
         at = (f'<a class="handle" href="{esc(author_url)}" target="_blank" '
               f'rel="noopener">@{esc(handle)}</a>')
-    elif source == "browser" and url:
+    elif source != "x" and url:
         # Author-less post (browser bookmark): the site's domain is the closest thing to a byline.
-        domain = esc((urlsplit(url).hostname or "").lower().removeprefix("www."))
+        domain = (urlsplit(url).hostname or "").lower().removeprefix("www.")
         at = (f'<a class="handle" href="{esc(url)}" target="_blank" '
-              f'rel="noopener">🌐 {domain}</a>')
+              f'rel="noopener">{esc(domain)}</a>')
     else:
         at = ""
+    if avatar:
+        av = f'<img class="avatar" src="{esc(avatar)}" alt="" loading="lazy">'
+    elif source != "x" and (domain or handle):
+        av = _letter_avatar(domain or handle)
+    else:
+        av = '<div class="avatar"></div>'
     badge = esc(_SOURCE_LABELS.get(source, source.capitalize()))
     head = f'<div class="head">{av}{at}<span class="badge">{badge}</span></div>'
     media = _media_imgs(p.get("media_json"))

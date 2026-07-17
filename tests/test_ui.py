@@ -1,7 +1,37 @@
 """HTML screen tests — same fakes/DI as the JSON API tests."""
 
-from xbb.templates import legend
+from xbb.templates import legend, post_card
 from xbb.webui import _source_chips
+
+
+def test_web_card_gets_deterministic_letter_avatar():
+    """Author-less web cards render a colored initial in the avatar slot (no third-party
+    favicon fetch — that would leak library domains) and a plain-domain byline."""
+    p = {"text": "PEP 8", "source": "browser", "url": "https://www.python.org/dev/peps/"}
+    card = post_card(p)
+    assert 'class="avatar letter"' in card
+    assert ">P</div>" in card                        # initial from the domain, www-stripped
+    assert 'style="background:#' in card             # palette color inlined
+    assert card == post_card(p)                      # deterministic across calls
+    assert ">python.org</a>" in card                 # byline is the bare domain
+    assert "🌐 python.org" not in card               # old emoji byline retired
+    color = card.split('style="background:')[1][:8]
+    other = post_card({"text": "t", "source": "browser", "url": "https://news.ycombinator.com/x"})
+    assert ">N</div>" in other                       # different domain, its own initial
+    assert f"background:{color}" in card             # same seed → same color (stable hash)
+
+
+def test_handle_card_without_avatar_falls_back_to_letter():
+    """Future Reddit/GitHub cards (handle, no avatar_url) seed the initial from the handle;
+    X cards keep the plain empty slot they always had."""
+    reddit = post_card({"text": "t", "source": "reddit", "handle": "spez"})
+    assert 'class="avatar letter"' in reddit and ">S</div>" in reddit
+    assert ">@spez</a>" in reddit
+    x = post_card({"text": "t", "source": "x", "handle": "alice"})
+    assert 'class="avatar"></div>' in x and "letter" not in x
+    with_img = post_card({"text": "t", "source": "browser", "url": "https://a.io/",
+                          "avatar_url": "https://img.example/pic.jpg"})
+    assert '<img class="avatar"' in with_img         # a real image always wins
 
 
 def test_source_chip_urls_are_percent_encoded():
