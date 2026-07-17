@@ -1,5 +1,6 @@
 """HTML screen tests — same fakes/DI as the JSON API tests."""
 
+from xbb.templates import legend
 from xbb.webui import _source_chips
 
 
@@ -102,6 +103,16 @@ def test_graph_ui_renders_approved_user_centered_visualization(client, seeded_db
     assert 'data-edge-kinds="ownership theme similarity membership"' in r.text
     assert 'data-layout="user-centered"' in r.text
     assert 'data-selection-path="post theme user"' in r.text
+    assert 'class="legend graph-legend" data-mode="graph"' in r.text
+    assert 'data-parent="" aria-pressed="true"' in r.text
+    assert 'data-parent="Theme &lt;unsafe&gt;" aria-pressed="false"' in r.text
+    assert all(contract in r.text for contract in (
+        "function focusContext()", "function renderGraphState()", "function updateGraphState()",
+        "function themeAvailable(parent)", "function disableUnavailableThemes()",
+        "function reconcileSearchFocus()", "themeEdgeForPost", "data-edge-kind",
+        "aria-disabled", "unavailable",
+    ))
+    assert "setThemeFocus(null)" in r.text and "setThemeFocus(d.label)" in r.text
     assert 'id="graph-fallback"' in r.text and "JavaScript is required" in r.text
     assert "3 bookmarks will appear" in r.text
     assert "Theme &lt;unsafe&gt;" in r.text and "Theme <unsafe>" not in r.text
@@ -109,6 +120,13 @@ def test_graph_ui_renders_approved_user_centered_visualization(client, seeded_db
                                              "#2faa6f", "#2aa7bd", "#9aa0ab"))
     assert 'href="/ui/graph"' in r.text
     assert "tenant_id" not in r.text and "@example.com" not in r.text
+
+
+def test_feed_legend_remains_navigation(client):
+    markup = legend([("AI & Engineering", 2)])
+    assert 'class="legend"' in markup and 'data-mode="graph"' not in markup
+    assert 'href="/ui/feed"' in markup
+    assert 'href="/ui/feed?parent=AI%20%26%20Engineering"' in markup
 
 
 def test_graph_pageview_is_logged(client):

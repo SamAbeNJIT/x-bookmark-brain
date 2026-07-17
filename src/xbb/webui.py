@@ -924,7 +924,7 @@ def ui_graph(con=Depends(get_db)):
     body = (
         '<p class="lead">Your bookmarks form one connected network rooted on you, with radial '
         'theme communities and semantic bridges between ideas.</p>'
-        + legend(groups)
+        + legend(groups, graph_mode=True)
         + graph_visualization(fallback)
     )
     return page("Your knowledge graph", body, wide=True)

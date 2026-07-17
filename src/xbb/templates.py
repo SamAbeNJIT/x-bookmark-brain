@@ -38,19 +38,30 @@ def parent_color(parent: str | None) -> str | None:
     return PARENT_COLORS.get(parent) if parent else None
 
 
-def legend(groups: list[tuple[str, int]], active: str | None = None) -> str:
-    """Clickable color legend. `groups` is [(parent, count)]; links filter the feed."""
+def legend(
+    groups: list[tuple[str, int]], active: str | None = None, *, graph_mode: bool = False
+) -> str:
+    """Color legend; links filter feeds unless graph mode turns them into focus controls."""
+    legend_class = "legend graph-legend" if graph_mode else "legend"
+    mode_attr = ' data-mode="graph"' if graph_mode else ""
     all_cls = " active" if active is None else ""
-    chips = [f'<a class="chip{all_cls}" href="/ui/feed">All</a>']
+    href = "/ui/graph" if graph_mode else "/ui/feed"
+
+    def graph_attrs(parent: str, pressed: bool = False) -> str:
+        return (f' data-parent="{esc(parent)}" aria-pressed="{str(pressed).lower()}"'
+                if graph_mode else "")
+
+    chips = [f'<a class="chip{all_cls}" href="{href}"{graph_attrs("", True)}>All</a>']
     for parent, count in groups:
         c = PARENT_COLORS.get(parent, PARENT_COLORS["Other"])
         cls = " active" if parent == active else ""
+        chip_href = href if graph_mode else f"/ui/feed?parent={quote(parent)}"
         chips.append(
-            f'<a class="chip{cls}" href="/ui/feed?parent={quote(parent)}" style="--c:{c}">'
+            f'<a class="chip{cls}" href="{chip_href}" style="--c:{c}"{graph_attrs(parent)}>'
             f'<span class="sw"></span>{esc(parent)}'
             f'<span class="badge">{count:,}</span></a>'
         )
-    return f'<div class="legend">{"".join(chips)}</div>'
+    return f'<div class="{legend_class}"{mode_attr}>{"".join(chips)}</div>'
 
 _HEAD = (
     '<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">'
@@ -230,6 +241,7 @@ _STYLE = """
   .chip .badge { background: transparent; color: var(--muted); padding: 0; margin-left: .05rem; }
   .chip.active { border-color: var(--c, var(--accent));
                  background: color-mix(in srgb, var(--c, #5b6cf0) 14%, var(--panel)); font-weight: 600; }
+  .graph-legend .chip.unavailable { opacity: .38; box-shadow: none; pointer-events: none; }
 
   /* category tree */
   .tree { max-width: 880px; }
@@ -289,6 +301,7 @@ _STYLE = """
                  gap: .35rem; flex-wrap: wrap; pointer-events: none; }
   .graph-stats span { border: 1px solid var(--line); background: rgba(255,255,255,.92);
                       border-radius: 999px; padding: .25rem .55rem; font-size: .72rem; }
+  .graph-stats .graph-focus-stat { border-color: var(--c, var(--accent)); font-weight: 700; }
   .graph-zoom { position: absolute; left: .7rem; bottom: .7rem; z-index: 2; display: flex;
                 flex-direction: column; gap: 0; border-radius: 10px; overflow: hidden; }
   .graph-zoom button { width: 2rem; height: 2rem; padding: 0; background: var(--panel);
@@ -521,9 +534,10 @@ fetch('/ui/graph/data').then(function(r){if(!r.ok)throw new Error('graph data');
   var rawLinks=data.edges.filter(function(e){return ids.has(e.source)&&ids.has(e.target)&&
     (e.kind==='ownership'||e.kind==='theme'||e.kind==='similarity'||e.kind==='membership');});
   var byId=new Map(visible.map(function(n){return[n.id,n];}));
-  var themeFor=new Map(), degree=new Map(), selected=null, edgesOn=true, threshold=.5;
+  var themeFor=new Map(), themeEdgeForPost=new Map(), degree=new Map(), selected=null,
+    focusParent=null, searchQuery='', edgesOn=true, threshold=.5;
   rawLinks.forEach(function(e){
-    if(e.kind==='theme')themeFor.set(e.source,e.target);
+    if(e.kind==='theme'){themeFor.set(e.source,e.target);themeEdgeForPost.set(e.source,e);}
     if(e.kind==='similarity'){degree.set(e.source,(degree.get(e.source)||0)+1);
       degree.set(e.target,(degree.get(e.target)||0)+1);}
   });
@@ -533,8 +547,11 @@ fetch('/ui/graph/data').then(function(r){if(!r.ok)throw new Error('graph data');
   var links=rawLinks.filter(function(e){return e.kind!=='similarity'||
     byId.get(e.source).parent===byId.get(e.target).parent||strongestBridges.has(e);});
   var bridges=strongestBridges.size;
-  document.getElementById('graph-stats').innerHTML='<span><b>'+data.meta.post_nodes+
+  var stats=document.getElementById('graph-stats');
+  function renderStats(){stats.innerHTML='<span><b>'+data.meta.post_nodes+
     '</b> bookmarks</span><span><b>'+data.meta.similarity_edges+'</b> links</span><span><b>'+bridges+'</b> bridges</span>';
+    if(focusParent){var focus=document.createElement('span'),theme=themes.find(function(n){return n.label===focusParent;});
+      focus.className='graph-focus-stat';focus.style.setProperty('--c',(theme&&theme.color)||'#5b53e8');focus.textContent='Focused: '+focusParent;stats.appendChild(focus);}}
   var svg=d3.select(host).insert('svg',':first-child');
   var w=svg.node().clientWidth,h=svg.node().clientHeight;
   var scene=svg.append('g'), haloLayer=scene.append('g'), linkLayer=scene.append('g'), nodeLayer=scene.append('g');
@@ -562,15 +579,22 @@ fetch('/ui/graph/data').then(function(r){if(!r.ok)throw new Error('graph data');
     .force('x',d3.forceX(w/2).strength(.025)).force('y',d3.forceY(h/2).strength(.025));
   var halo=haloLayer.selectAll('circle').data(themes).join('circle').attr('fill',function(d){return d.color;})
     .attr('fill-opacity',.065).attr('stroke',function(d){return d.color;}).attr('stroke-opacity',.18)
-    .attr('stroke-dasharray','3 6').attr('r',function(d){return 54+Math.sqrt(d.count||1)*7;});
+    .attr('stroke-dasharray','3 6').attr('r',function(d){return 54+Math.sqrt(d.count||1)*7;})
+    .attr('data-parent',function(d){return d.label;}).style('cursor','pointer')
+    .on('click',function(e,d){e.stopPropagation();setThemeFocus(d.label);});
   var path=linkLayer.selectAll('path').data(links).join('path').attr('fill','none')
+    .attr('data-edge-kind',function(e){return e.kind;})
+    .attr('data-source',function(e){return edgeId(e.source);}).attr('data-target',function(e){return edgeId(e.target);})
     .attr('stroke',function(e){if(e.kind==='ownership')return '#5b53e8';
       if(e.kind==='theme')return (byId.get(e.target.id||e.target)||{}).color||'#c7c4bc';
       return strongestBridges.has(e)?'#776ff0':'#9da0a8';})
     .attr('stroke-width',function(e){return e.kind==='ownership' ? 1.8 : e.kind==='theme' ? .7 : .45+1.35*(e.weight||0);})
     .attr('stroke-linecap','round');
   var node=nodeLayer.selectAll('g').data(visible).join('g').attr('tabindex',0).attr('role','button')
-    .on('click',function(e,d){if(d.type==='post'){selected=d;renderSelection();}});
+    .attr('data-node-type',function(d){return d.type;}).attr('data-parent',function(d){return d.parent||d.label||'';})
+    .on('click',function(e,d){e.stopPropagation();if(d.type==='theme')setThemeFocus(d.label);
+      else if(d.type==='post'){selected=d;updateGraphState();}})
+    .on('keydown',function(e,d){if((e.key==='Enter'||e.key===' ')&&(d.type==='theme'||d.type==='post')){e.preventDefault();this.dispatchEvent(new MouseEvent('click',{bubbles:true}));}});
   node.append('circle').attr('r',function(d){return d.type==='user'?34:d.type==='theme'?18:Math.min(10,4+Math.sqrt(degree.get(d.id)||0));})
     .attr('fill',function(d){return d.type==='user'?'#fff':(d.color||'#9aa0ab');})
     .attr('stroke',function(d){return d.type==='user'?'#5b53e8':'#fff';}).attr('stroke-width',function(d){return d.type==='user'?4:2;});
@@ -583,15 +607,32 @@ fetch('/ui/graph/data').then(function(r){if(!r.ok)throw new Error('graph data');
   function curve(e){var dx=e.target.x-e.source.x,dy=e.target.y-e.source.y,mx=(e.source.x+e.target.x)/2;
     var my=(e.source.y+e.target.y)/2,bend=e.kind==='similarity' ? .12 : 0;
     return 'M'+e.source.x+','+e.source.y+' Q'+(mx-dy*bend)+','+(my+dx*bend)+' '+e.target.x+','+e.target.y;}
-  function renderSelection(){
-    var active=new Set();
-    if(selected){active.add(selected.id);var theme=themeFor.get(selected.id);if(theme)active.add(theme);active.add('user:me');
+  function focusContext(){var nodes=new Set(),edges=new Set();if(!focusParent)return {nodes:nodes,edges:edges};
+    var theme=themes.find(function(n){return n.label===focusParent;});nodes.add('user:me');if(theme)nodes.add(theme.id);
+    visible.forEach(function(n){if(n.type==='post'&&n.parent===focusParent)nodes.add(n.id);});
+    links.forEach(function(e){var a=edgeId(e.source),b=edgeId(e.target),an=byId.get(a),bn=byId.get(b);
+      if((e.kind==='theme'&&nodes.has(a)&&nodes.has(b))||(e.kind==='ownership'&&theme&&(a===theme.id||b===theme.id))||
+        (e.kind==='similarity'&&an&&bn&&an.parent===focusParent&&bn.parent===focusParent)){edges.add(e);}
+      if(strongestBridges.has(e)&&keepEdge(e)&&an&&bn&&((an.parent===focusParent)!==(bn.parent===focusParent))){
+        edges.add(e);var outside=an.parent===focusParent?bn:an;nodes.add(a);nodes.add(b);
+        var outsideTheme=themeFor.get(outside.id),outsideThemeEdge=themeEdgeForPost.get(outside.id);
+        if(outsideTheme){nodes.add(outsideTheme);if(outsideThemeEdge)edges.add(outsideThemeEdge);}}
+    });return {nodes:nodes,edges:edges};}
+  function renderGraphState(){
+    var active=new Set(), activeEdges=new Set(), context=focusContext();
+    if(selected){active.add(selected.id);var outsideFocus=focusParent&&selected.parent!==focusParent;
+      var theme=themeFor.get(selected.id);if(!outsideFocus&&theme)active.add(theme);if(!outsideFocus)active.add('user:me');
       links.forEach(function(e){if(e.kind==='similarity'&&(edgeId(e.source)===selected.id||edgeId(e.target)===selected.id)){
-        active.add(edgeId(e.source));active.add(edgeId(e.target));}});}
-    node.style('opacity',function(d){return !selected||active.has(d.id)?1:.16;})
-      .select('circle').attr('stroke-width',function(d){return selected&&active.has(d.id)?4:(d.type==='user'?4:2);});
-    path.style('opacity',function(e){if(!keepEdge(e))return 0;if(!selected)return e.kind==='ownership' ? .65 : e.kind==='theme' ? .16 : .25;
-      return active.has(edgeId(e.source))&&active.has(edgeId(e.target)) ? .9 : .025;});
+        if(!outsideFocus){active.add(edgeId(e.source));active.add(edgeId(e.target));activeEdges.add(e);}}
+        if((e.kind==='theme'||e.kind==='ownership')&&active.has(edgeId(e.source))&&active.has(edgeId(e.target)))activeEdges.add(e);});}
+    function nodeOpacity(d){if(searchQuery&&d.type==='post'&&(d.label||'').toLowerCase().indexOf(searchQuery)<0)return .06;
+      if(selected&&active.has(d.id))return 1;if(focusParent)return context.nodes.has(d.id)?(selected?.34:1):.07;return selected?.16:1;}
+    function haloOpacity(d){if(focusParent&&d.label!==focusParent)return .08;if(selected&&!active.has(d.id))return .3;return 1;}
+    function edgeOpacity(e){if(!keepEdge(e))return 0;if(selected&&activeEdges.has(e))return .9;
+      if(focusParent)return context.edges.has(e)?(selected?.3:.9):.018;
+      if(selected)return .025;return e.kind==='ownership' ? .65 : e.kind==='theme' ? .16 : .25;}
+    node.style('opacity',nodeOpacity).select('circle').attr('stroke-width',function(d){return selected&&active.has(d.id)?4:(d.type==='user'?4:2);});
+    halo.style('opacity',haloOpacity);path.style('opacity',edgeOpacity);
     var panel=document.getElementById('graph-preview');
     if(!selected){panel.innerHTML='<div class="graph-preview-empty"><div class="graph-user-mini">You</div><div class="graph-preview-title">Your knowledge graph</div><p class="muted">Every theme belongs to one connected personal library. Select a bookmark to trace it through its theme hub back to you, then inspect its closest semantic neighbors across the graph.</p></div>';return;}
     panel.textContent='';var themeNode=byId.get(themeFor.get(selected.id));
@@ -600,7 +641,7 @@ fetch('/ui/graph/data').then(function(r){if(!r.ok)throw new Error('graph data');
     var swatch=document.createElement('i');swatch.style.setProperty('--c',(themeNode&&themeNode.color)||'#9aa0ab');
     themeLabel.appendChild(swatch);themeLabel.appendChild(document.createTextNode((themeNode&&themeNode.label)||'Other'));
     var close=document.createElement('button');close.type='button';close.textContent='×';close.setAttribute('aria-label','Close preview');
-    close.onclick=function(){selected=null;renderSelection();};head.appendChild(themeLabel);head.appendChild(close);panel.appendChild(head);
+    close.onclick=function(){selected=null;updateGraphState();};head.appendChild(themeLabel);head.appendChild(close);panel.appendChild(head);
     var crumb=document.createElement('div');crumb.className='graph-path';crumb.textContent='Your library → '+(themeNode?themeNode.label:'Other');panel.appendChild(crumb);
     var title=document.createElement('h3');title.textContent=selected.label||'Saved bookmark';panel.appendChild(title);
     if(selected.url&&/^https?:\/\//i.test(selected.url)){var a=document.createElement('a');a.href=selected.url;a.target='_blank';a.rel='noopener';a.textContent='Open original ↗';panel.appendChild(a);}
@@ -618,20 +659,36 @@ fetch('/ui/graph/data').then(function(r){if(!r.ok)throw new Error('graph data');
   });
   function centerOnMe(animated){var t=d3.zoomIdentity.translate(w/2,h/2).scale(1).translate(-root.x,-root.y);
     (animated?svg.transition().duration(450):svg).call(zoom.transform,t);}
+  var legendChips=document.querySelectorAll('.graph-legend[data-mode="graph"] .chip');
+  function syncLegend(){legendChips.forEach(function(chip){var on=(chip.dataset.parent||'')===(focusParent||'');
+    chip.classList.toggle('active',on);chip.setAttribute('aria-pressed',String(on));});}
+  function updateGraphState(){syncLegend();renderStats();renderGraphState();}
+  function themeAvailable(parent){return themes.some(function(theme){return theme.label===parent;});}
+  function setThemeFocus(parent){if(parent&&!themeAvailable(parent))return false;
+    focusParent=parent&&focusParent!==parent?parent:null;selected=null;updateGraphState();return true;}
+  function disableUnavailableThemes(){legendChips.forEach(function(chip){var parent=chip.dataset.parent||null;
+    var unavailable=Boolean(parent&&!themeAvailable(parent));chip.classList.toggle('unavailable',unavailable);
+    chip.setAttribute('aria-disabled',String(unavailable));if(unavailable)chip.setAttribute('tabindex','-1');else chip.removeAttribute('tabindex');});}
+  legendChips.forEach(function(chip){chip.addEventListener('click',function(e){e.preventDefault();
+    if(chip.getAttribute('aria-disabled')==='true')return;setThemeFocus(chip.dataset.parent||null);});});
   function reset(){threshold=.5;document.getElementById('graph-threshold').value=50;
-    document.getElementById('graph-threshold-value').textContent='0.50';selected=null;edgesOn=true;
-    document.getElementById('graph-edges').classList.add('on');renderSelection();centerOnMe(true);force.alpha(1).restart();}
+    document.getElementById('graph-threshold-value').textContent='0.50';searchQuery='';
+    document.getElementById('graph-search').value='';edgesOn=true;document.getElementById('graph-edges').classList.add('on');
+    document.getElementById('graph-edges').setAttribute('aria-pressed','true');setThemeFocus(null);centerOnMe(true);force.alpha(1).restart();}
   document.getElementById('graph-centered').onclick=function(){centered=true;radial();this.classList.add('on');document.getElementById('graph-free').classList.remove('on');force.alpha(.8).restart();};
   document.getElementById('graph-free').onclick=function(){centered=false;themes.forEach(function(n){n.fx=null;n.fy=null;});root.fx=w/2;root.fy=h/2;this.classList.add('on');document.getElementById('graph-centered').classList.remove('on');force.alpha(1).restart();};
-  document.getElementById('graph-threshold').oninput=function(){threshold=Number(this.value)/100;document.getElementById('graph-threshold-value').textContent=threshold.toFixed(2);renderSelection();};
-  document.getElementById('graph-edges').onclick=function(){edgesOn=!edgesOn;this.classList.toggle('on',edgesOn);this.setAttribute('aria-pressed',String(edgesOn));renderSelection();};
+  document.getElementById('graph-threshold').oninput=function(){threshold=Number(this.value)/100;document.getElementById('graph-threshold-value').textContent=threshold.toFixed(2);renderGraphState();};
+  document.getElementById('graph-edges').onclick=function(){edgesOn=!edgesOn;this.classList.toggle('on',edgesOn);this.setAttribute('aria-pressed',String(edgesOn));renderGraphState();};
   document.getElementById('graph-reset').onclick=reset;document.getElementById('graph-center').onclick=function(){centerOnMe(true);};
   document.getElementById('graph-zoom-in').onclick=function(){svg.transition().call(zoom.scaleBy,1.3);};
   document.getElementById('graph-zoom-out').onclick=function(){svg.transition().call(zoom.scaleBy,.77);};document.getElementById('graph-fit').onclick=function(){centerOnMe(true);};
-  document.getElementById('graph-search').oninput=function(){var q=this.value.trim().toLowerCase();
-    node.style('opacity',function(d){return !q||d.type!=='post'||(d.label||'').toLowerCase().indexOf(q)>=0?1:.1;});};
+  function reconcileSearchFocus(){if(!searchQuery||!focusParent)return false;var matches=visible.filter(function(n){return n.type==='post'&&(n.label||'').toLowerCase().indexOf(searchQuery)>=0;});
+    if(matches.some(function(n){return n.parent!==focusParent;})){setThemeFocus(null);return true;}return false;}
+  document.getElementById('graph-search').oninput=function(){searchQuery=this.value.trim().toLowerCase();if(!reconcileSearchFocus())updateGraphState();};
+  svg.on('click',function(e){if(e.target===svg.node()&&(focusParent||selected))setThemeFocus(null);});
+  document.addEventListener('keydown',function(e){if(e.key==='Escape'&&(focusParent||selected))setThemeFocus(null);});
   window.addEventListener('resize',function(){if(centered)radial();else{w=svg.node().clientWidth;h=svg.node().clientHeight;root.fx=w/2;root.fy=h/2;}force.alpha(.4).restart();});
-  fallback.hidden=true;renderSelection();centerOnMe(false);
+  fallback.hidden=true;disableUnavailableThemes();updateGraphState();centerOnMe(false);
 }).catch(function(){fallback.hidden=false;});
 })();</script>
 """
