@@ -44,3 +44,11 @@ def test_valid_session_passes_the_gate(monkeypatch, seeded_db, fake_ai):
     c.cookies.set(SESSION_COOKIE, token)
     r = c.get("/ui/feed", follow_redirects=False)
     assert r.status_code == 200
+
+
+def test_source_connect_routes_are_never_public(monkeypatch, seeded_db, fake_ai):
+    monkeypatch.setenv("REDDIT_CLIENT_ID", "reddit-client")
+    c = _client(monkeypatch, seeded_db, fake_ai)
+    for path in ("/connect/reddit/login", "/connect/reddit/callback?code=x&state=y"):
+        r = c.get(path, follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/login"

@@ -19,6 +19,14 @@ class Config:
     x_client_id: str | None
     x_redirect_uri: str
 
+    # Additional OAuth bookmark sources. Reddit is an installed app (no client secret);
+    # GitHub is a confidential OAuth App and requires both id and secret.
+    reddit_client_id: str | None
+    reddit_redirect_uri: str
+    github_client_id: str | None
+    github_client_secret: str | None
+    github_redirect_uri: str
+
     # AWS / Bedrock
     aws_region: str
     bedrock_labeling_model: str | None
@@ -53,12 +61,10 @@ class Config:
     ask_price_usd: float
     ingestion_price_usd: float
 
-    # Free tier: bookmarks importable before paying (one-time slice) + free asks per day.
+    # Free tier: X bookmarks importable before paying (one-time slice) + free asks per day.
+    # All non-X sources are unlimited/free and have no source-specific limit knobs.
     free_bookmark_limit: int
     free_asks_per_day: int
-    # Browser-bookmark uploads are free (no X API cost — just pennies of embedding/labeling);
-    # this caps how many a single account may import.
-    free_web_bookmark_limit: int
 
     # Import slider: price per bookmark of purchased entitlement (first free_bookmark_limit free).
     price_per_bookmark_usd: float
@@ -94,6 +100,17 @@ class Config:
         return cls(
             x_client_id=os.getenv("X_CLIENT_ID"),
             x_redirect_uri=os.getenv("X_REDIRECT_URI", "http://127.0.0.1:8000/oauth/callback"),
+            reddit_client_id=os.getenv("REDDIT_CLIENT_ID"),
+            reddit_redirect_uri=os.getenv(
+                "REDDIT_REDIRECT_URI",
+                "http://127.0.0.1:8000/connect/reddit/callback",
+            ),
+            github_client_id=os.getenv("GITHUB_CLIENT_ID"),
+            github_client_secret=os.getenv("GITHUB_CLIENT_SECRET"),
+            github_redirect_uri=os.getenv(
+                "GITHUB_REDIRECT_URI",
+                "http://127.0.0.1:8000/connect/github/callback",
+            ),
             aws_region=os.getenv("AWS_REGION", "us-east-1"),
             bedrock_labeling_model=os.getenv("BEDROCK_LABELING_MODEL"),
             bedrock_reasoning_model=os.getenv("BEDROCK_REASONING_MODEL"),
@@ -114,8 +131,6 @@ class Config:
             ask_price_usd=float(os.getenv("ASK_PRICE_USD", "0.05")),  # 2026-07-10 pivot: 10¢ -> 5¢
             ingestion_price_usd=float(os.getenv("INGESTION_PRICE_USD", "9.99")),
             free_bookmark_limit=int(os.getenv("FREE_BOOKMARK_LIMIT", "100")),
-            # 500 free (owner, 2026-07-15; was 5000), then 1¢ each from the shared imports pool
-            free_web_bookmark_limit=int(os.getenv("FREE_WEB_BOOKMARK_LIMIT", "500")),
             free_asks_per_day=int(os.getenv("FREE_ASKS_PER_DAY", "5")),
             price_per_bookmark_usd=float(os.getenv("PRICE_PER_BOOKMARK_USD", "0.01")),
             stripe_credit_sub_price_id=os.getenv("STRIPE_CREDIT_SUB_PRICE_ID"),

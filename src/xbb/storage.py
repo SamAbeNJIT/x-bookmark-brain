@@ -18,11 +18,41 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 import psycopg
 from pgvector.psycopg import register_vector
 
 from .config import DEFAULT_TENANT_ID
+
+
+TEST_DATABASE_NAME = "xbookmarkbrain_test"
+
+
+def replace_database_name(dsn: str, database: str = TEST_DATABASE_NAME) -> str:
+    """Replace only a URL DSN's database path, preserving credentials and query options."""
+    parsed = urlsplit(dsn)
+    if parsed.scheme not in {"postgres", "postgresql"} or not parsed.hostname:
+        raise ValueError("DATABASE_URL must be a postgres:// or postgresql:// URL")
+    if not database or "/" in database:
+        raise ValueError("database name must be a non-empty path segment")
+    return urlunsplit((parsed.scheme, parsed.netloc, f"/{quote(database, safe='')}",
+                       parsed.query, parsed.fragment))
+
+
+def database_identity(dsn: str) -> tuple[str, str, int | None, str]:
+    """Normalized server/database identity, intentionally ignoring credentials and options."""
+    parsed = urlsplit(dsn)
+    if parsed.scheme not in {"postgres", "postgresql"} or not parsed.hostname:
+        raise ValueError("DATABASE_URL must be a postgres:// or postgresql:// URL")
+    return (parsed.scheme.replace("postgresql", "postgres"), parsed.hostname.lower(),
+            parsed.port or 5432, unquote(parsed.path.lstrip("/")))
+
+
+def assert_distinct_database_urls(development_dsn: str, test_dsn: str) -> None:
+    """Fail closed before schema initialization or destructive test truncation."""
+    if database_identity(development_dsn) == database_identity(test_dsn):
+        raise RuntimeError("Refusing destructive test operation: development and test DSNs match")
 
 
 def _tenant(tenant_id: str | None) -> str:
@@ -516,29 +546,25 @@ def reduce_import_limit(con: psycopg.Connection, n: int) -> None:
     con.commit()
 
 
-def effective_import_cap(con: psycopg.Connection, free_limit: int,
-                         free_web_limit: int | None = None) -> int | None:
+def effective_import_cap(con: psycopg.Connection, free_limit: int) -> int | None:
     """Total X posts this tenant may store: None = unlimited (comped/legacy ingestion_paid),
-    else the free X slice + the purchased imports balance. The balance is a SHARED pool
-    across sources (2026-07-15): pass `free_web_limit` so browser bookmarks imported beyond
-    their own free slice reduce what remains for X. Omitting it preserves X-only math."""
+    else the free X slice + purchased imports. Non-X sources are unlimited/free and never
+    consume or reduce this X-only entitlement."""
     if is_ingestion_paid(con):
         return None
-    web_overage = (0 if free_web_limit is None
-                   else max(0, post_count(con, "browser") - free_web_limit))
-    return free_limit + max(0, import_limit(con) - web_overage)
+    return free_limit + import_limit(con)
 
 
-def imports_available(con: psycopg.Connection, free_limit: int,
-                      free_web_limit: int) -> int | None:
-    """Unused imports in the shared rolling balance: purchased imports minus every post
-    already stored beyond its source's free slice. None = unlimited (comped). The balance
-    is never decremented — it's derived from counts, so the math can't drift."""
+def imports_available(con: psycopg.Connection, free_limit: int) -> int | None:
+    """Unused purchased X imports after this tenant's stored X overage.
+
+    None means unlimited/comped. Non-X posts are unlimited/free and never touch the pool;
+    the balance is derived from X counts rather than decremented, so the math cannot drift.
+    """
     if is_ingestion_paid(con):
         return None
     x_over = max(0, post_count(con, "x") - free_limit)
-    web_over = max(0, post_count(con, "browser") - free_web_limit)
-    return max(0, import_limit(con) - x_over - web_over)
+    return max(0, import_limit(con) - x_over)
 
 
 def is_ingestion_paid(con: psycopg.Connection) -> bool:
@@ -550,9 +576,11 @@ def is_ingestion_paid(con: psycopg.Connection) -> bool:
 
 
 def post_count(con: psycopg.Connection, source: str | None = None) -> int:
-    """This tenant's stored posts, optionally scoped to one source ('x' / 'browser').
-    Entitlement math MUST scope to 'x' — browser imports are free and metered separately,
-    so they must never consume or inflate the paid X slice."""
+    """This tenant's stored posts, optionally scoped to one source.
+
+    Entitlement math must scope to ``x``; every non-X source is unlimited/free and must
+    never consume or inflate the paid X slice.
+    """
     if source is None:
         return con.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
     return con.execute(

@@ -90,8 +90,7 @@ def _run(cfg: Config, tenant_id: str) -> None:
 
         _set(tenant_id, step="backfill", detail="fetching new bookmarks from X…")
         # Entitlement cap: free slice + purchased import_limit (None = unlimited/comped).
-        cap = storage.effective_import_cap(con, cfg.free_bookmark_limit,
-                                           cfg.free_web_bookmark_limit)
+        cap = storage.effective_import_cap(con, cfg.free_bookmark_limit)
         n_posts = storage.post_count(con, "x")  # entitlement counts X posts only
         purchased = storage.import_limit(con)
         # Page the FULL timeline (non-incremental) when there's unfetched entitlement below the
@@ -161,6 +160,68 @@ def start(tenant_id: str | None = None) -> bool:
              finished_at=time.time())
         return False
     threading.Thread(target=_run, args=(cfg, tid), daemon=True).start()
+    return True
+
+
+def _run_source(cfg: Config, tenant_id: str, source: str) -> None:
+    """Run a registered source through the shared embed/label pipeline."""
+    from . import sources, storage
+    from .storage import connect
+
+    con = None
+    try:
+        con = connect(cfg.app_database_url, tenant_id)
+        adapter = sources.get_adapter(source)
+        label = sources.source_label(source)
+        _set(tenant_id, step="backfill", detail=f"fetching saved items from {label}…")
+        cap = storage.effective_import_cap(con, cfg.free_bookmark_limit) if source == "x" else None
+        added = adapter.backfill(con, cfg, incremental=True, max_total=cap)
+        _set(tenant_id, added=added)
+        if storage.post_count(con, source) == 0:
+            _set(tenant_id, step="done",
+                 detail=f"no saved items found on your {label} account yet")
+            return
+        _embed_and_label(cfg, con, tenant_id)
+        _set(tenant_id, step="done",
+             detail=f"{label} is up to date — {added} new saved item(s) added")
+    except Exception as exc:
+        logger.exception("sync.error tenant=%s source=%s: %s", tenant_id, source, exc)
+        _set(tenant_id, step="error", error=f"{type(exc).__name__}: {exc}")
+    finally:
+        if con is not None:
+            con.close()
+        _set(tenant_id, running=False, finished_at=time.time())
+
+
+def start_source(tenant_id: str, source: str) -> bool:
+    """Start one configured, connected registry source in the tenant's single sync slot."""
+    from . import sources
+    from .storage import connect
+
+    cfg = Config.from_env()
+    adapter = sources.get_adapter(source)
+    with _lock:
+        if _jobs.get(tenant_id, {}).get("running"):
+            return False
+        _jobs[tenant_id] = dict(_IDLE)
+        _jobs[tenant_id].update({"running": True, "step": "starting", "detail": source,
+                                 "started_at": time.time(), "finished_at": None})
+    try:
+        adapter = sources.get_configured_adapter(source, cfg)
+    except sources.SourceNotConfiguredError as exc:
+        _set(tenant_id, running=False, step="error", error=str(exc), finished_at=time.time())
+        return False
+    con = connect(cfg.app_database_url, tenant_id)
+    try:
+        connected = adapter.is_connected(con)
+    finally:
+        con.close()
+    if not connected:
+        _set(tenant_id, running=False, step="error",
+             error=f"Not connected to {sources.source_label(source)} yet — connect it from Sync first.",
+             finished_at=time.time())
+        return False
+    threading.Thread(target=_run_source, args=(cfg, tenant_id, source), daemon=True).start()
     return True
 
 

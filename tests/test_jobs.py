@@ -6,6 +6,7 @@ import time
 import pytest
 
 from xbb import jobs
+from xbb import sources, storage
 from xbb import xapi as xapi_module
 
 A = "00000000-0000-0000-0000-00000000aaaa"
@@ -46,7 +47,8 @@ def test_concurrent_tenants_do_not_block_each_other(db, fake_run):
     assert jobs.start(B) is True           # DIFFERENT tenant: runs concurrently (the fix)
     assert started[B].wait(timeout=5)
     assert jobs.status(A)["running"] and jobs.status(B)["running"]
-    release[A].set(); release[B].set()
+    release[A].set()
+    release[B].set()
     for t in (A, B):
         for _ in range(50):
             if not jobs.status(t)["running"]:
@@ -59,12 +61,14 @@ def test_concurrent_tenants_do_not_block_each_other(db, fake_run):
 def test_restart_allowed_after_finish(db, fake_run):
     started, release = fake_run
     assert jobs.start(A) is True
-    started[A].wait(timeout=5); release[A].set()
+    started[A].wait(timeout=5)
+    release[A].set()
     for _ in range(50):
         if not jobs.status(A)["running"]:
             break
         time.sleep(0.1)
-    release[A].clear(); started[A].clear()
+    release[A].clear()
+    started[A].clear()
     assert jobs.start(A) is True           # finished job doesn't wedge the tenant
 
 
@@ -82,3 +86,25 @@ def test_not_connected_error_is_per_tenant(db, monkeypatch, fake_run):
     s = jobs.status(C)
     assert s["running"] is False and "Connect X" in (s["error"] or "")
     assert jobs.status(A)["step"] == "idle"          # other tenants unaffected
+
+
+def test_generic_source_job_passes_no_x_cap_to_non_x(monkeypatch):
+    calls = []
+
+    class Adapter:
+        def backfill(self, con, cfg, *, incremental, max_total):
+            calls.append((incremental, max_total))
+            return 2
+
+    class Con:
+        def close(self):
+            pass
+
+    monkeypatch.setitem(sources.REGISTRY, "reddit-test", Adapter())
+    monkeypatch.setattr(storage, "connect", lambda dsn, tenant: Con())
+    monkeypatch.setattr(storage, "post_count", lambda con, source: 2)
+    monkeypatch.setattr(jobs, "_embed_and_label", lambda cfg, con, tenant: None)
+    jobs._run_source(__import__("xbb.config", fromlist=["Config"]).Config.from_env(), A,
+                     "reddit-test")
+    assert calls == [(True, None)]
+    assert jobs.status(A)["step"] == "done"

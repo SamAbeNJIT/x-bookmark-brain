@@ -1,6 +1,6 @@
 """CLI admin actions.
 
-    python -m xbb backfill     # pull your X bookmarks via the OAuth API (connect first in the web app)
+    python -m xbb backfill [--source x|reddit|github]
     python -m xbb index        # embed bookmarks for semantic search (needs Bedrock)
     python -m xbb categorize   # derive a taxonomy (first run) + label bookmarks (needs Bedrock)
 
@@ -42,27 +42,38 @@ def _progress(done: int, total: int) -> None:
         print()
 
 
-def _backfill() -> int:
+def _backfill(source: str = "x") -> int:
     _load_env()
     cfg = Config.from_env()
-    if not cfg.x_client_id:
+    if source == "x" and not cfg.x_client_id:
         print("X_CLIENT_ID is not set in .env", file=sys.stderr)
         return 2
     if not cfg.database_url:
         print("DATABASE_URL is not set in .env", file=sys.stderr)
         return 2
-    from . import xapi
+    from . import sources, xapi
     from .storage import connect, init_db
 
     init_db(cfg.database_url, cfg.tenant_id)
     con = connect(cfg.database_url, cfg.tenant_id)
     try:
-        if not xapi.is_connected(con):
-            print("Not connected to X. Start the web app and click 'Connect X' first "
-                  "(http://127.0.0.1:8000).", file=sys.stderr)
+        if source == "x":
+            connected = xapi.is_connected(con)
+        else:
+            try:
+                adapter = sources.get_configured_adapter(source, cfg)
+            except sources.SourceError as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
+            connected = adapter.is_connected(con)
+        if not connected:
+            print(f"Not connected to {sources.source_label(source)}. Connect it in the web app first.",
+                  file=sys.stderr)
             return 2
-        print("Backfilling bookmarks into the database via the X API ...")
-        n = xapi.backfill_via_api(con, cfg.x_client_id, incremental=True)
+        print(f"Backfilling saved items into the database via {sources.source_label(source)} ...")
+        n = (xapi.backfill_via_api(con, cfg.x_client_id, incremental=True)
+             if source == "x" else
+             adapter.backfill(con, cfg, incremental=True, max_total=None))
         print(f"Done. {n} new bookmark(s) stored.")
     finally:
         con.close()
@@ -121,6 +132,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Unknown command: {argv[0]}\n", file=sys.stderr)
         print(__doc__, file=sys.stderr)
         return 2
+    if argv[0] == "backfill":
+        source = "x"
+        if len(argv) > 1:
+            if len(argv) != 3 or argv[1] != "--source":
+                print("Usage: python -m xbb backfill [--source x|reddit|github]", file=sys.stderr)
+                return 2
+            source = argv[2].lower()
+        return _backfill(source)
     return command()
 
 

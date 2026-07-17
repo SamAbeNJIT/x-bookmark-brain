@@ -15,13 +15,13 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, authui, billing, categorize, credits, jobs, legal, mail, pricing, storage, xconv
+from . import auth, authui, billing, categorize, credits, graph, jobs, legal, mail, pricing, storage, xconv
 from .config import Config
 from .deps import SESSION_COOKIE, get_ai, get_db, resolve_tenant
 from .log import logger
 from .search import index_posts, search
 from .storage import connect
-from .templates import esc, page
+from .templates import page
 from .webui import ui_router
 
 
@@ -253,8 +253,7 @@ def create_app() -> FastAPI:
     def billing_page_route(request: Request, src: str = "", con=Depends(get_db)):
         cfg = Config.from_env()
         bal = storage.credit_balance(con)
-        cap = storage.effective_import_cap(con, cfg.free_bookmark_limit,
-                                           cfg.free_web_bookmark_limit)
+        cap = storage.effective_import_cap(con, cfg.free_bookmark_limit)
         free_left = max(cfg.free_asks_per_day - storage.free_asks_used_today(con), 0)
         asks = int(bal / cfg.ask_price_usd) if cfg.ask_price_usd else 0
         body = ""
@@ -281,20 +280,16 @@ def create_app() -> FastAPI:
         if cap is None:
             body += "<p class=muted>✓ Full bookmark history unlocked.</p>"
         else:
-            # The rolling balance is a SHARED pool: any source's posts beyond its free slice
-            # draw from it (X beyond free X slice, browser beyond the free 500).
-            remaining = storage.imports_available(con, cfg.free_bookmark_limit,
-                                                  cfg.free_web_bookmark_limit)
+            # Purchased imports are X-only; every non-X source is unlimited and free.
+            remaining = storage.imports_available(con, cfg.free_bookmark_limit)
             n_x = storage.post_count(con, "x")
-            n_web = storage.post_count(con, "browser")
-            lib = f"{n_x:,} X posts" + (f" + {n_web:,} web bookmarks" if n_web else "")
             purchased_n = storage.import_limit(con)
             body += (
-                f"<p class=lead><b>{remaining:,} imports remaining</b> · {lib} imported "
-                f"({cfg.free_bookmark_limit:,} X + {cfg.free_web_bookmark_limit:,} web free"
+                f"<p class=lead><b>{remaining:,} X imports remaining</b> · {n_x:,} X posts imported "
+                f"({cfg.free_bookmark_limit:,} X free"
                 + (f"; {purchased_n:,} imports purchased" if purchased_n > 0 else "")
-                + "). Unused imports roll over and cover whatever you save next — from any "
-                "source.</p>")
+                + "). Unused imports roll over for future X saves. Browser, Reddit, GitHub, "
+                "and all other non-X sources are unlimited and free.</p>")
             if cfg.stripe_secret_key:
                 cents = int(cfg.price_per_bookmark_usd * 100)
                 per = cfg.price_per_bookmark_usd
@@ -302,8 +297,8 @@ def create_app() -> FastAPI:
                 body += (
                     "<p><b>Buy imports</b> — each import brings one saved post into your "
                     f"library, {cents}¢ each, on top of your free {cfg.free_bookmark_limit}. "
-                    "<b>Unused imports stay on your account</b> and cover whatever you save "
-                    "next. Refunds on request, anytime.</p>"
+                    "<b>Unused imports stay on your account</b> and cover future X saves. "
+                    "Non-X sources are always free. Refunds on request, anytime.</p>"
                     '<form method=post action="/billing/checkout">'
                     '<input type=hidden name=kind value="import">'
                     f'<input type=range name=amount id=imp_usd min={pricing.IMPORT_MIN_USD:.0f} '
@@ -393,7 +388,7 @@ def create_app() -> FastAPI:
         return page("Billing", '<div class="answer">🎉 Thanks! Your purchase is being applied. '
                     "If you bought imports, <b>your library is importing right now</b> — watch "
                     'progress on the <a href="/ui/refresh">Sync page</a>. Unused imports stay '
-                    "on your account for whatever you save next.</div>"
+                    "on your account for future X saves; non-X sources remain free.</div>"
                     '<p><a href="/ui/billing">Back to billing</a></p>')
 
     @app.post("/billing/webhook")
@@ -426,6 +421,18 @@ def create_app() -> FastAPI:
     @app.post("/index")
     def index_route(con=Depends(get_db), ai=Depends(get_ai)):
         return {"indexed": index_posts(con, ai)}
+
+    @app.get("/ui/graph/data")
+    def graph_data_route(node_cap: int = graph.DEFAULT_NODE_CAP,
+                         knn_k: int = graph.DEFAULT_KNN_K,
+                         sim_threshold: float = graph.DEFAULT_SIM_THRESHOLD,
+                         posts: bool = True, categories: bool = True,
+                         con=Depends(get_db)):
+        return graph.build_graph(
+            con, node_cap=min(max(node_cap, 0), 1500), knn_k=min(max(knn_k, 0), 20),
+            sim_threshold=max(-1.0, min(sim_threshold, 1.0)), include_posts=posts,
+            include_categories=categories,
+        )
 
     # --- taxonomy review (#5) ---
     @app.post("/taxonomy/derive")

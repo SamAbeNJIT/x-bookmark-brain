@@ -1,0 +1,8 @@
+{
+  "data": {
+    "children": [
+      {"kind": "t3", "data": {"name": "t3_abc", "title": "A saved post", "selftext": "Useful details", "is_self": true, "permalink": "/r/python/comments/abc/a_saved_post/", "created_utc": 1717200000, "author": "alice", "score": 42}},
+      {"kind": "t1", "data": {"name": "t1_def", "body": "A thoughtful comment", "link_title": "Discussion title", "permalink": "/r/python/comments/abc/a_saved_post/def/", "created_utc": 1717200100, "author": "[deleted]", "score": 7}}
+    ]
+  }
+}

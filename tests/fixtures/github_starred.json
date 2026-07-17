@@ -1,0 +1,4 @@
+[
+  {"starred_at": "2026-07-02T10:00:00Z", "repo": {"id": 101, "full_name": "acme/alpha", "description": "Alpha toolkit", "topics": ["python", "rag"], "html_url": "https://github.com/acme/alpha", "stargazers_count": 123, "owner": {"id": 9, "login": "acme", "avatar_url": "https://avatars.example/acme"}}},
+  {"starred_at": "2026-07-01T10:00:00Z", "repo": {"id": 102, "full_name": "octo/null-safe", "description": null, "html_url": "https://github.com/octo/null-safe", "stargazers_count": 5, "owner": {"id": 10, "login": "octo", "avatar_url": null}}}
+]

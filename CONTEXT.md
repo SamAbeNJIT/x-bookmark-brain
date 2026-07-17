@@ -6,8 +6,10 @@ The shared vocabulary for x-bookmark-brain. Use these exact terms in code, issue
   a reply, or a quote tweet.
 - **Web bookmark** — a browser bookmark (URL + title + folder path) imported from a
   Chrome/Firefox Netscape-HTML export. Stored as a post with `source='browser'`, no author.
-- **Source** — where a post came from: `x` (synced from X) or `browser` (uploaded export).
-  Entitlement/cap math is always scoped to `x`; web bookmarks are free and metered separately.
+- **Source** — where a saved item came from: `x` (synced from X), `browser` (uploaded
+  export), `reddit` (saved posts/comments), or `github` (starred repositories). Entitlement
+  and cap math is always scoped to `x`; every non-X source is unlimited/free and never uses
+  the purchased X imports pool.
 - **Post** — any X status: the bookmarked item itself or a captured context post.
 - **Author** — the X account that wrote a post (handle, display name, id).
 - **Parent post** — the post directly above a bookmarked *reply* (captured for context).
