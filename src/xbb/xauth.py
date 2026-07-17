@@ -82,6 +82,12 @@ def fetch_me(access_token: str) -> dict[str, Any]:
     return resp.json()["data"]
 
 
+class XAuthExpired(Exception):
+    """X rejected the stored refresh token (rotated/expired/revoked) — the user must
+    re-authorize. Distinct from transient errors so the sync path can prompt a reconnect
+    instead of surfacing a raw stack trace."""
+
+
 def refresh_token(client_id: str, refresh: str) -> dict[str, Any]:
     """Get a fresh access token using the stored refresh token."""
     import httpx
@@ -96,5 +102,9 @@ def refresh_token(client_id: str, refresh: str) -> dict[str, Any]:
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         timeout=30.0,
     )
+    # X's refresh tokens rotate and are single-use; a reused/expired/revoked one comes back
+    # 400 invalid_grant (401 if the client is off). Either way the fix is re-authorization.
+    if resp.status_code in (400, 401):
+        raise XAuthExpired(f"X refused the refresh token (HTTP {resp.status_code})")
     resp.raise_for_status()
     return resp.json()

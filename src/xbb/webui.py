@@ -183,6 +183,20 @@ def ui_refresh_start(request: Request, con=Depends(get_db)):
     return RedirectResponse(url="/ui/refresh", status_code=303)
 
 
+def _reconnect_link(prominent: bool = False) -> str:
+    """Re-run the X authorization to replace a dead/rotated token. Points at the existing
+    connect flow (/oauth/login), which saves fresh tokens to the CURRENT session tenant and
+    (re)links the X identity — safe for accounts whose x_user_id was never linked."""
+    if prominent:
+        return ('<p><a class="stat" style="display:inline-block;text-decoration:none;'
+                'border-color:var(--accent)" href="/oauth/login">'
+                '<b style="font-size:1rem">↻ Reconnect X</b>'
+                '<span>re-authorize to sync — your bookmarks stay put</span></a></p>')
+    return ('<p class=muted style="margin-top:.7rem;font-size:.82rem">'
+            'Sync failing or X disconnected? '
+            '<a href="/oauth/login">Reconnect your X account</a>.</p>')
+
+
 @ui_router.get("/ui/refresh")
 def ui_refresh(request: Request, con=Depends(get_db)):
     cfg = Config.from_env()
@@ -193,6 +207,15 @@ def ui_refresh(request: Request, con=Depends(get_db)):
     first_run = (not running and s["step"] in ("idle",)
                  and storage.post_count(con, "x") == 0)  # browser-only users still need Connect X
     btn_label = "Syncing…" if running else "↻ Sync now"
+    if s["error"] == "x_connection_expired":
+        # Dead X token — X periodically requires re-authorizing. Lead with the reconnect,
+        # no failing Sync button (it'd just error again).
+        return page("Sync",
+                    '<div class="answer" style="border-left-color:#d64545">⚠️ Your X '
+                    "connection expired — X occasionally requires re-authorizing. Reconnect "
+                    "below and your sync will work again. Your bookmarks, categories, and "
+                    "credits all stay exactly as they are.</div>"
+                    + _reconnect_link(prominent=True))
     if s["error"]:
         state = f'<div class="answer" style="border-left-color:#d64545">⚠️ {esc(s["error"])}</div>'
     elif s["step"] == "done":
@@ -263,6 +286,10 @@ def ui_refresh(request: Request, con=Depends(get_db)):
         "reaches bookmarks already synced, so it only fetches what's new. Beyond your "
         "free slice, each new bookmark uses one import (1¢).</p>"
     )
+    # Always-available escape hatch for a dead token (the app can't always detect one before
+    # you press Sync): a quiet reconnect link for anyone who's connected.
+    if xapi.is_connected(con):
+        note += _reconnect_link()
     return page("Sync", state + form + note)
 
 

@@ -45,6 +45,49 @@ def test_refresh_ui_renders(client):
     assert "Sync" in r.text
 
 
+def test_expired_x_token_shows_reconnect(client, seeded_db):
+    """A dead refresh token (jobs sets error=x_connection_expired) must render the friendly
+    reconnect prompt + button, not a raw stack trace, and no failing Sync button."""
+    from xbb import jobs
+    from xbb.config import DEFAULT_TENANT_ID
+    jobs._set(DEFAULT_TENANT_ID, step="error", error="x_connection_expired", running=False)
+    try:
+        r = client.get("/ui/refresh")
+        assert r.status_code == 200
+        assert "connection expired" in r.text and 'href="/oauth/login"' in r.text
+        assert "Reconnect X" in r.text
+        assert "x_connection_expired" not in r.text          # sentinel never shown raw
+        assert 'action="/ui/refresh"' not in r.text          # no Sync button to re-fail
+    finally:
+        with jobs._lock:
+            jobs._jobs.clear()
+
+
+def test_refresh_ui_offers_reconnect_for_connected_users(client, seeded_db):
+    from xbb import jobs, storage, xapi
+    from xbb.config import DEFAULT_TENANT_ID
+    with jobs._lock:
+        jobs._jobs.clear()
+    con = storage.connect(seeded_db, DEFAULT_TENANT_ID)
+    xapi.save_tokens(con, {"access_token": "a", "refresh_token": "r", "expires_in": 7200})
+    con.close()
+    r = client.get("/ui/refresh")  # now connected → quiet reconnect escape hatch shows
+    assert "Reconnect your X account" in r.text and 'href="/oauth/login"' in r.text
+
+
+def test_refresh_token_raises_xauthexpired_on_400(monkeypatch):
+    import httpx
+    from xbb import xauth
+
+    class _Resp:
+        status_code = 400
+        def raise_for_status(self): raise AssertionError("should not reach raise_for_status")
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp())
+    import pytest
+    with pytest.raises(xauth.XAuthExpired):
+        xauth.refresh_token("cid", "dead-token")
+
+
 def test_pageviews_are_logged_server_side(client):
     """GET /ui/* emits a ui.view event (path + tenant only — never content)."""
     import logging
