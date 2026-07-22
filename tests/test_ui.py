@@ -116,6 +116,24 @@ def test_expired_x_token_shows_reconnect(client, seeded_db):
             jobs._jobs.clear()
 
 
+def test_x_credit_exhaustion_shows_friendly_state(client, seeded_db):
+    """The 402 outage sentinel renders reassuring copy — never the sentinel, a raw status
+    code, or an API URL (the 2026-07-14 outage showed users httpx errors with their X id)."""
+    from xbb import jobs
+    from xbb.config import DEFAULT_TENANT_ID
+    jobs._set(DEFAULT_TENANT_ID, step="error", error="x_api_credits", running=False)
+    try:
+        r = client.get("/ui/refresh")
+        assert r.status_code == 200
+        assert "nothing is wrong with your account" in r.text
+        assert "x_api_credits" not in r.text
+        assert "402" not in r.text and "api.twitter.com" not in r.text
+        assert 'action="/ui/refresh"' in r.text        # Sync button stays: retry can succeed
+    finally:
+        with jobs._lock:
+            jobs._jobs.clear()
+
+
 def test_refresh_ui_offers_reconnect_for_connected_users(client, seeded_db):
     from xbb import jobs, storage, xapi
     from xbb.config import DEFAULT_TENANT_ID

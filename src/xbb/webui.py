@@ -283,7 +283,14 @@ def ui_refresh(request: Request, con=Depends(get_db)):
                     "below and your sync will work again. Your bookmarks, categories, and "
                     "credits all stay exactly as they are.</div>"
                     + _reconnect_link(prominent=True))
-    if s["error"]:
+    if s["error"] == "x_api_credits":
+        # Platform-wide X API credit exhaustion (402) — our bill, not their account. Honest
+        # and calm; the Sync button stays because a retry works the moment credits are back.
+        state = ('<div class="answer" style="border-left-color:#d64545">⚠️ X is briefly '
+                 "limiting our bookmark fetching — nothing is wrong with your account or "
+                 "payment. Please try again in a little while; your bookmarks, categories, "
+                 "and credits are all safe.</div>")
+    elif s["error"]:
         state = f'<div class="answer" style="border-left-color:#d64545">⚠️ {esc(s["error"])}</div>'
     elif s["step"] == "done":
         # The conversion moment: their library just got organized — hand them the next step.

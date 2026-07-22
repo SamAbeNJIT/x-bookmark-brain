@@ -14,6 +14,8 @@ import threading
 import time
 from typing import Any
 
+import httpx
+
 from .config import Config
 from .log import logger
 
@@ -79,6 +81,28 @@ def _embed_and_label(cfg: Config, con, tenant_id: str) -> None:
                              usage.cost_of(e["model"], e["input_tokens"], e["output_tokens"]))
 
 
+# One credits-exhausted email per window, not one per failed sync: the 2026-07-14 outage saw
+# 35 attempts in a day; the first alert is the actionable one (top up in the X dev console).
+_CREDITS_ALERT_WINDOW_S = 6 * 3600
+_last_credits_alert = 0.0
+
+
+def _alert_x_credits_exhausted(cfg: Config) -> None:
+    global _last_credits_alert
+    with _lock:
+        if time.time() - _last_credits_alert < _CREDITS_ALERT_WINDOW_S:
+            return
+        _last_credits_alert = time.time()
+    from . import mail
+    mail.send_owner_alert(
+        "🚨 X API credits exhausted — bookmark syncs are failing",
+        "The X API is returning 402 Payment Required: the developer account is out of API "
+        "credits, and every X sync fails until it is topped up. Add credits in the X developer "
+        "console; affected users can then just press Sync again. (At most one of these alerts "
+        "every 6 hours.)",
+        ses_sender=cfg.ses_sender, owner_email=cfg.owner_alert_email, region=cfg.aws_region)
+
+
 def _run(cfg: Config, tenant_id: str) -> None:
     from . import storage, xapi, xauth
     from .storage import connect
@@ -123,6 +147,18 @@ def _run(cfg: Config, tenant_id: str) -> None:
     except xauth.XAuthExpired:  # dead X token → prompt reconnect, not a raw error
         logger.warning("sync.reconnect_needed tenant=%s", tenant_id)
         _set(tenant_id, step="error", error="x_connection_expired")
+    except httpx.HTTPStatusError as e:
+        # X API failures are OUR platform's problem, never the user's — and the raw httpx
+        # message embeds the request URL (their X user id). Sanitized sentinel/status only.
+        code = e.response.status_code
+        if code == 402:  # developer-account API credits exhausted (2026-07-14: 14 signups lost)
+            logger.error("sync.x_credits_exhausted tenant=%s", tenant_id)
+            _alert_x_credits_exhausted(cfg)
+            _set(tenant_id, step="error", error="x_api_credits")
+        else:
+            logger.exception("sync.error tenant=%s: %s", tenant_id, e)
+            _set(tenant_id, step="error",
+                 error=f"X returned an error (HTTP {code}) — please try again in a few minutes.")
     except Exception as e:  # surface any failure to the UI instead of dying silently
         logger.exception("sync.error tenant=%s: %s", tenant_id, e)  # full traceback -> CloudWatch
         _set(tenant_id, step="error", error=f"{type(e).__name__}: {e}")
