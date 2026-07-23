@@ -164,3 +164,235 @@ def test_generic_source_job_passes_no_x_cap_to_non_x(monkeypatch):
                      "reddit-test")
     assert calls == [(True, None)]
     assert jobs.status(A)["step"] == "done"
+
+
+def test_auto_answer_claim_spawns_once_and_raw_state_skips_eligibility(db, monkeypatch):
+    from xbb import autoanswer
+    from xbb.config import Config, DEFAULT_TENANT_ID
+
+    con = storage.connect(db)
+    for i in range(5):
+        con.execute("INSERT INTO posts (id, text) VALUES (%s, %s)", (str(i), f"post {i}"))
+    category_id = con.execute(
+        "INSERT INTO categories (name, parent) VALUES ('RAG', 'AI') RETURNING id"
+    ).fetchone()[0]
+    for i in range(3):
+        con.execute("INSERT INTO assignments (post_id, category_id) VALUES (%s, %s)",
+                    (str(i), category_id))
+    con.commit()
+    monkeypatch.setenv("AUTO_ANSWER_ENABLED", "true")
+    spawned = []
+
+    class ImmediateRecordThread:
+        def __init__(self, *, target, args, daemon):
+            spawned.append((target, args, daemon))
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(threading, "Thread", ImmediateRecordThread)
+    cfg = Config.from_env()
+    try:
+        assert jobs.status(DEFAULT_TENANT_ID)["step"] == "idle"
+        assert jobs._maybe_start_auto_answer(cfg, DEFAULT_TENANT_ID, con) is True
+        assert autoanswer.load(con)["status"] == "pending"
+        assert len(spawned) == 1 and spawned[0][2] is True
+        storage.set_state(con, autoanswer.STATE_KEY, "malformed-but-terminal")
+        assert autoanswer.load(con) is None
+        monkeypatch.setattr(autoanswer, "eligible", lambda con: (_ for _ in ()).throw(
+            AssertionError("raw state must short-circuit eligibility")))
+        assert jobs._maybe_start_auto_answer(cfg, DEFAULT_TENANT_ID, con) is False
+        assert len(spawned) == 1
+    finally:
+        con.close()
+
+
+def test_auto_answer_rollout_modes_are_tenant_enforced(monkeypatch):
+    from xbb.config import Config
+
+    monkeypatch.setenv("OWNER_TENANT_ID", A)
+    monkeypatch.setenv("AUTO_ANSWER_MODE", "off")
+    cfg = Config.from_env()
+    assert not cfg.auto_answer_enabled_for(A)
+    assert not cfg.auto_answer_enabled_for(B)
+
+    monkeypatch.setenv("AUTO_ANSWER_MODE", "owner")
+    cfg = Config.from_env()
+    assert cfg.auto_answer_enabled_for(A)
+    assert not cfg.auto_answer_enabled_for(B)
+    monkeypatch.delenv("OWNER_TENANT_ID")
+    assert not Config.from_env().auto_answer_enabled_for(A)
+    monkeypatch.setenv("OWNER_TENANT_ID", A)
+
+    monkeypatch.setenv("AUTO_ANSWER_MODE", "all")
+    cfg = Config.from_env()
+    assert cfg.auto_answer_enabled_for(A)
+    assert cfg.auto_answer_enabled_for(B)
+
+    monkeypatch.delenv("AUTO_ANSWER_MODE")
+    monkeypatch.setenv("AUTO_ANSWER_ENABLED", "true")
+    assert Config.from_env().auto_answer_mode == "all"
+
+    monkeypatch.setenv("AUTO_ANSWER_MODE", "unexpected")
+    with pytest.raises(ValueError, match="off, owner, all"):
+        Config.from_env()
+
+
+@pytest.mark.parametrize("failure_point", ["eligibility", "claim", "thread_start"])
+def test_auto_answer_start_path_failure_does_not_change_enrichment_success(
+        monkeypatch, caplog, failure_point):
+    from xbb import autoanswer
+    from xbb.config import Config
+
+    rollbacks = []
+    failed_states = []
+
+    class Con:
+        def rollback(self):
+            rollbacks.append(True)
+
+        def close(self):
+            pass
+
+    class FailingThread:
+        def __init__(self, *, target, args, daemon):
+            pass
+
+        def start(self):
+            if failure_point == "thread_start":
+                raise RuntimeError("sensitive thread detail")
+
+    monkeypatch.setenv("AUTO_ANSWER_MODE", "all")
+    monkeypatch.setattr(storage, "connect", lambda dsn, tenant: Con())
+    monkeypatch.setattr(storage, "get_state", lambda con, key: None)
+    monkeypatch.setattr(jobs, "_embed_and_label", lambda cfg, con, tenant: None)
+    monkeypatch.setattr(autoanswer, "eligible", lambda con: (
+        (_ for _ in ()).throw(RuntimeError("sensitive eligibility detail"))
+        if failure_point == "eligibility"
+        else autoanswer.Eligibility("Question?", None)
+    ))
+    monkeypatch.setattr(autoanswer, "claim", lambda con, question: (
+        (_ for _ in ()).throw(RuntimeError("sensitive claim detail"))
+        if failure_point == "claim" else True
+    ))
+    monkeypatch.setattr(autoanswer, "save_failed", lambda con: failed_states.append(True))
+    monkeypatch.setattr(threading, "Thread", FailingThread)
+
+    jobs._run_enrich(Config.from_env(), A, 2)
+
+    assert jobs.status(A)["step"] == "done"
+    assert rollbacks
+    assert bool(failed_states) is (failure_point == "thread_start")
+    assert f"tenant={A} exception=RuntimeError" in caplog.text
+    assert "sensitive" not in caplog.text
+
+
+def test_browser_enrichment_claims_before_done(monkeypatch):
+    from xbb.config import Config
+
+    order = []
+
+    class Con:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(storage, "connect", lambda dsn, tenant: Con())
+    monkeypatch.setattr(jobs, "_embed_and_label", lambda cfg, con, tenant: order.append("enriched"))
+
+    def maybe(cfg, tenant, con):
+        assert jobs.status(tenant)["step"] != "done"
+        order.append("claimed")
+        return True
+
+    monkeypatch.setattr(jobs, "_maybe_start_auto_answer", maybe)
+    jobs._run_enrich(Config.from_env(), A, 2)
+    assert order == ["enriched", "claimed"]
+    assert jobs.status(A)["step"] == "done"
+
+
+def test_auto_answer_worker_meters_usage_without_ask_billing(db, monkeypatch):
+    from xbb import autoanswer
+    from xbb.config import Config, DEFAULT_TENANT_ID
+    from xbb import deps
+
+    con = storage.connect(db)
+    assert autoanswer.claim(con, "What did I save about RAG?")
+    before_credit = storage.credit_balance(con)
+    con.close()
+
+    class MeterAI:
+        def pop_usage(self):
+            return [{"model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                     "input_tokens": 100, "output_tokens": 20}]
+
+    monkeypatch.setattr(deps, "make_ai_client", lambda cfg: MeterAI())
+    monkeypatch.setattr(autoanswer.ask_module, "ask", lambda con, ai, question, k: {
+        "answer": "Stored answer.", "citations": [], "retrieved": [],
+    })
+    jobs._run_auto_answer(Config.from_env(), DEFAULT_TENANT_ID)
+    con = storage.connect(db)
+    try:
+        assert autoanswer.load(con)["status"] == "ready"
+        assert con.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0] == 1
+        assert storage.credit_balance(con) == before_credit
+        assert storage.free_asks_used_today(con) == 0
+        assert storage.get_state(con, "asks_total") is None
+    finally:
+        con.close()
+
+
+def test_auto_answer_worker_persists_failed_once(db, monkeypatch):
+    from xbb import autoanswer, deps
+    from xbb.config import Config, DEFAULT_TENANT_ID
+
+    con = storage.connect(db)
+    assert autoanswer.claim(con, "What did I save about RAG?")
+    con.close()
+
+    class NoUsageAI:
+        def pop_usage(self):
+            return []
+
+    monkeypatch.setattr(deps, "make_ai_client", lambda cfg: NoUsageAI())
+    monkeypatch.setattr(autoanswer, "generate",
+                        lambda *args: (_ for _ in ()).throw(RuntimeError("model failed")))
+    jobs._run_auto_answer(Config.from_env(), DEFAULT_TENANT_ID)
+    con = storage.connect(db)
+    try:
+        assert autoanswer.load(con)["status"] == "failed"
+        assert not autoanswer.claim(con, "Retry is forbidden")
+    finally:
+        con.close()
+
+
+def test_auto_answer_worker_rolls_back_db_failure_then_persists_failed_and_meters(
+        db, monkeypatch, caplog):
+    from xbb import autoanswer, deps
+    from xbb.config import Config, DEFAULT_TENANT_ID
+
+    con = storage.connect(db)
+    assert autoanswer.claim(con, "What did I save about RAG?")
+    con.close()
+
+    class MeterAI:
+        def pop_usage(self):
+            return [{"model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                     "input_tokens": 100, "output_tokens": 20}]
+
+    def fail_inside_transaction(con, ai, question):
+        con.execute("SELECT * FROM auto_answer_missing_relation")
+
+    monkeypatch.setattr(deps, "make_ai_client", lambda cfg: MeterAI())
+    monkeypatch.setattr(autoanswer, "generate", fail_inside_transaction)
+
+    jobs._run_auto_answer(Config.from_env(), DEFAULT_TENANT_ID)
+
+    con = storage.connect(db)
+    try:
+        assert autoanswer.load(con)["status"] == "failed"
+        assert con.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0] == 1
+        assert (f"funnel.auto_answer_failed tenant={DEFAULT_TENANT_ID} "
+                "exception=UndefinedTable") in caplog.text
+        assert "auto_answer_missing_relation" not in caplog.text
+    finally:
+        con.close()
