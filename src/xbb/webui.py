@@ -7,9 +7,11 @@ same `get_db` / `get_ai` dependencies. Kept in its own router so it barely touch
 from __future__ import annotations
 
 import json
+import random
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import (APIRouter, Depends, File, Form, HTTPException, Request, Response,
+                     UploadFile)
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from . import (auth, authui, bookmarks, categorize, credits, ingestion, jobs, landing, mail,
@@ -697,17 +699,46 @@ def _save_thread_js(turns: list, groups: list) -> str:
             f"JSON.stringify({payload}))}}catch(e){{}}</script>")
 
 
+# Client-side funnel beacons (sendBeacon → 204). Allowlisted names only; tenant + event,
+# never content — same telemetry rules as ui.view.
+_TRACK_EVENTS = {"composer_focused": "funnel.feed_composer_focused"}
+_TRACK_SOURCES = {"feed"}  # allowlisted `src` attribution values for ask entry points
+
+
+@ui_router.post("/ui/t")
+def ui_track(request: Request, e: str = ""):
+    event = _TRACK_EVENTS.get(e)
+    if event:
+        logger.info("%s tenant=%s", event, resolve_tenant(request, Config.from_env()))
+    return Response(status_code=204)
+
+
 @ui_router.get("/ui/ask")
-def ui_ask(question: str = "", con=Depends(get_db), ai=Depends(get_ai)):
+def ui_ask(question: str = "", src: str = "", con=Depends(get_db), ai=Depends(get_ai)):
     banner = _capped_banner(con, Config.from_env(), "banner_ask")
     # A prefilled question (?question=...) means a fresh intent — skip the restore.
     restore = _RESTORE_JS if not question else ""
-    return page("Ask", banner + _ask_form(question) + restore)
+    auto = ""
+    if question:
+        # Arriving with a question (the feed composer) IS the ask — start immediately.
+        # replaceState first so refresh/back lands on a clean /ui/ask instead of a URL
+        # that would re-submit (and re-charge) the same question.
+        src = src if src in _TRACK_SOURCES else ""
+        add_src = (
+            "var s=document.createElement('input');s.type='hidden';s.name='src';"
+            f"s.value={json.dumps(src)};f.appendChild(s);" if src else ""
+        )
+        auto = ("<script>(function(){var f=document.getElementById('askform');if(!f)return;"
+                + add_src +
+                "try{history.replaceState({},'','/ui/ask')}catch(e){}"
+                "f.requestSubmit();})()</script>")
+    return page("Ask", banner + _ask_form(question) + restore + auto)
 
 
 @ui_router.post("/ui/ask")
 def ui_ask_post(request: Request, question: str = Form(...), history: str = Form(""),
-                sources: str = Form(""), con=Depends(get_db), ai=Depends(get_ai)):
+                sources: str = Form(""), src: str = Form(""),
+                con=Depends(get_db), ai=Depends(get_ai)):
     # The thread rides in hidden form fields (client-held state, server stays stateless);
     # trim_history/trim_sources both validate the client-editable JSON and bound it.
     try:
@@ -721,9 +752,12 @@ def ui_ask_post(request: Request, question: str = Form(...), history: str = Form
     form = _ask_form(question, autofocus=False, history=turns or None,
                      sources=prior_sources or None)
     cfg = Config.from_env()
+    tenant = resolve_tenant(request, cfg)
+    src = src if src in _TRACK_SOURCES else ""
+    if src:
+        logger.info("funnel.feed_composer_submitted tenant=%s", tenant)
     # Owner perk: deeper retrieval against the 17k corpus.
-    k = 50 if (cfg.owner_tenant_id
-               and resolve_tenant(request, cfg) == cfg.owner_tenant_id) else 30
+    k = 50 if (cfg.owner_tenant_id and tenant == cfg.owner_tenant_id) else 30
     try:
         result = credits.ask_charged(con, ai, question, k, cfg.ask_price_usd,
                                      cfg.free_asks_per_day, history=turns)
@@ -735,6 +769,8 @@ def ui_ask_post(request: Request, question: str = Form(...), history: str = Form
         return page("Ask", form + msg)
     except Exception:
         return page("Ask", form + _ai_error("Ask"))
+    if src:  # completed answer for a feed-composer ask (started == submitted: same request)
+        logger.info("funnel.feed_composer_answered tenant=%s", tenant)
     cited = set(result["citations"])
     retrieved = result["retrieved"]
     # Raw post ids leaking into the prose read as garbage numbers (owner report). The prompt
@@ -1037,10 +1073,30 @@ def ui_feed(request: Request, parent: str = "", offset: int = 0, partial: int = 
     qs_view = f"&{encoded_view_query}" if encoded_view_query else ""
     toggle, cards_class, respond = _card_view(request, view, "/ui/feed", qs_view)
 
-    groups = [(g["parent"], g["total"]) for g in categorize.category_tree(con)]
+    cfg = Config.from_env()
+    tree = categorize.category_tree(con)
+    groups = [(g["parent"], g["total"]) for g in tree]
     where = f" in {esc(active)}" if active else ""
     note = f"{chips}{toggle}<p class=lead>Newest first{where} · scroll to keep loading. Tap a color to filter.</p>"
-    banner = _capped_banner(con, Config.from_env(), "banner_feed")
+    banner = _capped_banner(con, cfg, "banner_feed")
+    # The feed is where questions occur to people (26 feed-first vs 8 ask-first post-sync,
+    # 2026-07-22): capture the question right here. GET → /ui/ask?question=…&src=feed, which
+    # auto-starts the answer on arrival. Example rotates through THEIR categories, not a
+    # generic "ask anything". Funnel: viewed → focused (beacon) → submitted → answered.
+    examples = [c["name"] for g in tree for c in g["children"]]
+    example = random.choice(examples) if examples else "AI"
+    composer = (
+        '<form class="feed-ask" method="get" action="/ui/ask">'
+        '<input type="hidden" name="src" value="feed">'
+        '<input type="text" name="question" required '
+        f'placeholder="Ask your bookmarks anything… what did I save about {esc(example)}?">'
+        '<button class="ghost">Ask →</button></form>'
+        "<script>(function(){var i=document.querySelector('.feed-ask input[name=question]');"
+        "if(i)i.addEventListener('focus',function(){"
+        "try{navigator.sendBeacon('/ui/t?e=composer_focused')}catch(e){}},{once:true});})()"
+        "</script>"
+    )
+    logger.info("funnel.feed_composer_viewed tenant=%s", resolve_tenant(request, cfg))
 
     def _respond(body: str):
         return respond("Feed", body)
@@ -1070,7 +1126,7 @@ def ui_feed(request: Request, parent: str = "", offset: int = 0, partial: int = 
         "if(n<" + str(_PAGE) + "){done=true;more.remove();}"
         "});});io.observe(more);})();</script>"
     )
-    return _respond(banner + legend(groups, active) + note + feed + sentinel + js)
+    return _respond(banner + composer + legend(groups, active) + note + feed + sentinel + js)
 
 
 @ui_router.get("/ui/categories/{category_id}")

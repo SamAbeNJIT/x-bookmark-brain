@@ -169,6 +169,13 @@ _STYLE = """
          font-size: 1.02rem; border: 1px solid var(--line-2); border-radius: 12px;
          background: var(--panel); box-shadow: var(--shadow); font-family: inherit; }
   textarea { resize: vertical; min-height: 4.5rem; line-height: 1.5; display: block; }
+  /* feed ask composer: present but lighter than the cards it sits above */
+  .feed-ask { display: flex; gap: .5rem; margin: .1rem 0 .9rem; }
+  .feed-ask input[type=text] { flex: 1; min-width: 0; padding: .6rem .95rem;
+                               font-size: .95rem; box-shadow: none;
+                               border-color: var(--line); background: transparent; }
+  .feed-ask input[type=text]:focus { background: var(--panel); }
+  .feed-ask button { white-space: nowrap; flex: 0 0 auto; font-size: .88rem; }
   input:focus, textarea:focus { outline: none; border-color: var(--accent);
                 box-shadow: 0 0 0 4px var(--accent-soft); }
   button { padding: .6rem 1.05rem; font-size: .92rem; font-weight: 600; border: 0;

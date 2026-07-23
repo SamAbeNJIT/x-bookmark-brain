@@ -296,6 +296,74 @@ def test_feed_view_toggle_grid_list_and_cookie(client, seeded_db, fake_ai):
     assert 'class="cards list"' in r.text
 
 
+def _categorized_feed(seeded_db, fake_ai):
+    from xbb import categorize
+    from xbb.storage import connect
+    con = connect(seeded_db)
+    categorize.save_taxonomy(con, [{"name": "RAG"}, {"name": "Agents"}])
+    categorize.assign_unassigned(con, fake_ai)
+    con.close()
+
+
+def _capture_xbb_log():
+    import logging
+    from xbb.log import logger as xbb_logger
+    seen = []
+    h = logging.Handler()
+    h.emit = lambda r: seen.append(r.getMessage())
+    xbb_logger.addHandler(h)
+    return seen, lambda: xbb_logger.removeHandler(h)
+
+
+def test_feed_ask_composer_renders_and_instruments(client, seeded_db, fake_ai):
+    """Inline composer on the feed (26 feed-first vs 8 ask-first after sync, 2026-07-22):
+    GET form → /ui/ask, example rotates through the user's own categories, focus beacon
+    wired, and rendering logs funnel.feed_composer_viewed."""
+    _categorized_feed(seeded_db, fake_ai)
+    seen, cleanup = _capture_xbb_log()
+    try:
+        html = client.get("/ui/feed").text
+        assert 'class="feed-ask" method="get" action="/ui/ask"' in html
+        assert 'name="src" value="feed"' in html
+        assert "Ask your bookmarks anything" in html
+        assert "what did I save about RAG?" in html or "what did I save about Agents?" in html
+        assert "composer_focused" in html and "sendBeacon" in html
+        assert any(m.startswith("funnel.feed_composer_viewed tenant=") for m in seen)
+    finally:
+        cleanup()
+
+
+def test_ask_get_with_question_autostarts(client):
+    """?question= (the composer handoff) submits #askform on load — after replaceState so
+    refresh/back can't re-charge — and carries the allowlisted src attribution."""
+    autostart = "history.replaceState({},'','/ui/ask')"        # unique to the auto block
+    r = client.get("/ui/ask", params={"question": "rag evaluation", "src": "feed"})
+    assert autostart in r.text and "f.requestSubmit()" in r.text
+    assert '"feed"' in r.text                                  # src forwarded into the POST
+    r = client.get("/ui/ask", params={"question": "x", "src": "evil"})
+    assert '"evil"' not in r.text                              # non-allowlisted src dropped
+    r = client.get("/ui/ask")
+    assert autostart not in r.text                             # plain visits never auto-fire
+
+
+def test_feed_composer_funnel_events_and_beacon(client, seeded_db, fake_ai):
+    _categorized_feed(seeded_db, fake_ai)
+    client.post("/index")
+    seen, cleanup = _capture_xbb_log()
+    try:
+        r = client.post("/ui/ask", data={"question": "rag evaluation", "src": "feed"})
+        assert "Synthesized answer" in r.text
+        assert any(m.startswith("funnel.feed_composer_submitted tenant=") for m in seen)
+        assert any(m.startswith("funnel.feed_composer_answered tenant=") for m in seen)
+        assert client.post("/ui/t?e=composer_focused").status_code == 204
+        assert any(m.startswith("funnel.feed_composer_focused tenant=") for m in seen)
+        n = len(seen)
+        assert client.post("/ui/t?e=bogus").status_code == 204  # unknown event: no log, no 500
+        assert len([m for m in seen[n:] if m.startswith("funnel.")]) == 0
+    finally:
+        cleanup()
+
+
 def test_taxonomy_derive_via_ui(client):
     r = client.post("/ui/taxonomy/derive", follow_redirects=True)
     assert r.status_code == 200
