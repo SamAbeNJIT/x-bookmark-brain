@@ -81,6 +81,94 @@ def _embed_and_label(cfg: Config, con, tenant_id: str) -> None:
                              usage.cost_of(e["model"], e["input_tokens"], e["output_tokens"]))
 
 
+def _run_auto_answer(cfg: Config, tenant_id: str) -> None:
+    """Generate on an isolated tenant connection; failure never changes sync success."""
+    from . import autoanswer, storage, usage
+    from .deps import make_ai_client
+    from .storage import connect
+
+    con = None
+    ai = None
+    try:
+        con = connect(cfg.app_database_url, tenant_id)
+        state = autoanswer.load(con)
+        if not state or state.get("status") != "pending":
+            return
+        ai = make_ai_client(cfg)
+        autoanswer.generate(con, ai, state["q"])
+        logger.info("funnel.auto_answer_ready tenant=%s", tenant_id)
+    except Exception as exc:
+        logger.warning("funnel.auto_answer_failed tenant=%s exception=%s",
+                       tenant_id, type(exc).__name__)
+        if con is not None:
+            try:
+                con.rollback()
+                autoanswer.save_failed(con)
+            except Exception:
+                try:
+                    con.rollback()
+                except Exception:
+                    pass
+    finally:
+        if ai is not None and con is not None:
+            # A DB-originated generation error leaves psycopg's transaction aborted. Recover
+            # again after the failed-state write attempt so usage metering remains possible.
+            try:
+                con.rollback()
+            except Exception:
+                pass
+            for event in ai.pop_usage():
+                try:
+                    storage.record_usage(
+                        con,
+                        event["model"],
+                        event["input_tokens"],
+                        event["output_tokens"],
+                        usage.cost_of(event["model"], event["input_tokens"],
+                                      event["output_tokens"]),
+                    )
+                except Exception:
+                    logger.warning("funnel.auto_answer_metering_failed tenant=%s", tenant_id)
+        if con is not None:
+            con.close()
+
+
+def _maybe_start_auto_answer(cfg: Config, tenant_id: str, con) -> bool:
+    """Claim synchronously before done; the DB claim, not process memory, deduplicates work."""
+    from . import autoanswer, storage
+
+    if not cfg.auto_answer_enabled_for(tenant_id):
+        return False
+    claimed = False
+    try:
+        if storage.get_state(con, autoanswer.STATE_KEY) is not None:
+            return False
+        eligibility = autoanswer.eligible(con)
+        if eligibility.reason:
+            logger.info("funnel.auto_answer_skipped tenant=%s reason=%s",
+                        tenant_id, eligibility.reason)
+            return False
+        if not autoanswer.claim(con, eligibility.question or ""):
+            return False
+        claimed = True
+        logger.info("funnel.auto_answer_claimed tenant=%s", tenant_id)
+        threading.Thread(target=_run_auto_answer, args=(cfg, tenant_id), daemon=True).start()
+        return True
+    except Exception as exc:
+        logger.warning("funnel.auto_answer_start_failed tenant=%s exception=%s",
+                       tenant_id, type(exc).__name__)
+        try:
+            con.rollback()
+            if claimed:
+                autoanswer.save_failed(con)
+        except Exception:
+            try:
+                con.rollback()
+            except Exception:
+                pass
+        return False
+
+
 # One credits-exhausted email per window, not one per failed sync: the 2026-07-14 outage saw
 # 35 attempts in a day; the first alert is the actionable one (top up in the X dev console).
 _CREDITS_ALERT_WINDOW_S = 6 * 3600
@@ -132,6 +220,7 @@ def _run(cfg: Config, tenant_id: str) -> None:
             # Brand-new X accounts can have ZERO bookmarks — nothing to embed or categorize.
             # A friendly done-state beats a stack trace (two live signups hit this 2026-07-13).
             # (X-scoped: a browser-only library was already processed by its import job.)
+            _maybe_start_auto_answer(cfg, tenant_id, con)
             _set(tenant_id, step="done",
                  detail="no bookmarks found on your X account yet — save a few on X, then sync again")
             logger.info("sync.done tenant=%s added=0 empty_library=true", tenant_id)
@@ -139,6 +228,7 @@ def _run(cfg: Config, tenant_id: str) -> None:
 
         _embed_and_label(cfg, con, tenant_id)
 
+        _maybe_start_auto_answer(cfg, tenant_id, con)
         _set(tenant_id, step="done", detail=f"up to date — {added} new bookmark(s) added")
         logger.info("sync.done tenant=%s added=%d", tenant_id, added)
         if storage.is_capped_free(con, cfg.free_bookmark_limit):
@@ -214,10 +304,12 @@ def _run_source(cfg: Config, tenant_id: str, source: str) -> None:
         added = adapter.backfill(con, cfg, incremental=True, max_total=cap)
         _set(tenant_id, added=added)
         if storage.post_count(con, source) == 0:
+            _maybe_start_auto_answer(cfg, tenant_id, con)
             _set(tenant_id, step="done",
                  detail=f"no saved items found on your {label} account yet")
             return
         _embed_and_label(cfg, con, tenant_id)
+        _maybe_start_auto_answer(cfg, tenant_id, con)
         _set(tenant_id, step="done",
              detail=f"{label} is up to date — {added} new saved item(s) added")
     except Exception as exc:
@@ -270,6 +362,7 @@ def _run_enrich(cfg: Config, tenant_id: str, added: int) -> None:
     try:
         con = connect(cfg.app_database_url, tenant_id)
         _embed_and_label(cfg, con, tenant_id)
+        _maybe_start_auto_answer(cfg, tenant_id, con)
         _set(tenant_id, added=added, step="done",
              detail=f"{added} browser bookmark(s) imported, embedded & labeled")
         logger.info("import.enrich.done tenant=%s added=%d", tenant_id, added)

@@ -133,6 +133,32 @@ def test_first_answer_card_appears_exactly_once(capped):
     assert CARD not in second.text  # one-time: value was already pitched
 
 
+def test_auto_answer_does_not_consume_first_real_answer_upsell(
+        capped, seeded_db, monkeypatch):
+    import json
+    import time
+    from xbb import autoanswer
+
+    monkeypatch.setenv("AUTO_ANSWER_ENABLED", "true")
+    con = storage.connect(seeded_db)
+    storage.set_state(con, autoanswer.STATE_KEY, json.dumps({
+        "v": 1, "status": "ready", "q": "What did I save about RAG?",
+        "answer": "An automatic answer.", "citations": ["1001"],
+        "retrieved_ids": ["1001"], "created_at": time.time(),
+    }))
+    assert storage.get_state(con, "asks_total") is None
+    con.close()
+    jobs._set(DEFAULT_TENANT_ID, step="done", detail="up to date", running=False)
+    done = capped.get("/ui/refresh").text
+    assert "An automatic answer." in done
+    assert "complete your library" in done
+    assert "Browse your feed →" in done
+    assert "Continue this conversation" not in done
+    capped.post("/index")
+    first_real = capped.post("/ui/ask", data={"question": "rag evaluation"})
+    assert CARD in first_real.text
+
+
 def test_capped_banner_on_ask_and_feed(capped):
     capped.post("/index")
     assert BANNER in capped.get("/ui/ask").text

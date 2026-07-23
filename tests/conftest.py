@@ -141,6 +141,9 @@ def _point_at_test_db(monkeypatch):
     monkeypatch.delenv("KMS_KEY_ID", raising=False)
     monkeypatch.delenv("SES_SENDER", raising=False)
     monkeypatch.delenv("OWNER_ALERT_EMAIL", raising=False)  # alerts print, never email, in tests
+    # Feature flags default off unless the individual test explicitly enables the feature.
+    monkeypatch.delenv("AUTO_ANSWER_MODE", raising=False)
+    monkeypatch.delenv("AUTO_ANSWER_ENABLED", raising=False)
     # Never fire real X ad-conversion events from the suite: with the live X_ADS_* keys in
     # .env, xconv would otherwise be "configured" and every account-creation test would spawn
     # real API attempts. Tests that need a configured tracker set these explicitly.

@@ -98,6 +98,153 @@ def test_refresh_ui_renders(client):
     assert "each new bookmark uses one import" not in r.text
 
 
+def _set_auto_answer(dsn, state):
+    import json
+    from xbb import autoanswer, storage
+    con = storage.connect(dsn)
+    storage.set_state(con, autoanswer.STATE_KEY, json.dumps(state))
+    con.close()
+
+
+def _set_refresh_done(jobs, tenant_id):
+    with jobs._lock:
+        jobs._jobs.pop(tenant_id, None)
+    jobs._set(tenant_id, step="done", detail="up to date", running=False)
+
+
+def test_refresh_done_auto_answer_ready_is_cited_persistent_and_shown_once(
+        client, seeded_db, monkeypatch):
+    import logging
+    import time
+    from xbb import jobs
+    from xbb.config import DEFAULT_TENANT_ID
+    from xbb.log import logger as xbb_logger
+
+    monkeypatch.setenv("AUTO_ANSWER_ENABLED", "true")
+    _set_auto_answer(seeded_db, {
+        "v": 1, "status": "ready", "q": "What did I save about RAG?",
+        "answer": "Synthesized from [1].", "citations": ["1001"],
+        "retrieved_ids": ["1001", "1002"], "created_at": time.time(),
+    })
+    _set_refresh_done(jobs, DEFAULT_TENANT_ID)
+    seen = []
+    handler = logging.Handler()
+    handler.emit = lambda record: seen.append(record.getMessage())
+    xbb_logger.addHandler(handler)
+    try:
+        first = client.get("/ui/refresh").text
+        second = client.get("/ui/refresh").text
+        assert "What did I save about RAG?" in first
+        assert "Synthesized from [1]." in first
+        assert "From your library" in first and "★ cited [1]" in first
+        assert ('class="btnlink" href="/ui/ask" '
+                'data-component-id="continue-conversation-cta"') in first
+        assert 'class="btnlink ghost" href="/ui/feed">Browse your feed →</a>' in first
+        assert "ask a follow-up without rerunning this answer" not in first
+        assert 'class="stat" style="display:inline-block;text-decoration:none;margin-right:.6rem"' not in first
+        assert first.count("1002") == 1  # restore payload only; no uncited card is rendered
+        assert "Synthesized from [1]." in second  # persistent on later done views
+        shown = [message for message in seen if message.startswith("funnel.auto_answer_shown")]
+        assert len(shown) == 1
+    finally:
+        xbb_logger.removeHandler(handler)
+        with jobs._lock:
+            jobs._jobs.clear()
+
+
+def test_refresh_done_auto_answer_pending_then_stale_or_failed_falls_back(
+        client, seeded_db, monkeypatch):
+    import time
+    from xbb import jobs
+    from xbb.config import DEFAULT_TENANT_ID
+
+    monkeypatch.setenv("AUTO_ANSWER_ENABLED", "true")
+    _set_refresh_done(jobs, DEFAULT_TENANT_ID)
+    try:
+        _set_auto_answer(seeded_db, {
+            "v": 1, "status": "pending", "q": "Question?", "created_at": time.time(),
+        })
+        pending = client.get("/ui/refresh").text
+        assert "Composing your first answer" in pending
+        assert "location.reload()" in pending
+        assert "Ask your first question" in pending and "Browse your feed" in pending
+
+        _set_auto_answer(seeded_db, {
+            "v": 1, "status": "pending", "q": "Question?", "created_at": time.time() - 46,
+        })
+        stale = client.get("/ui/refresh").text
+        assert "Composing your first answer" not in stale
+        assert "Ask your first question" in stale and "location.reload()" not in stale
+
+        _set_auto_answer(seeded_db, {
+            "v": 1, "status": "failed", "created_at": time.time(),
+        })
+        failed = client.get("/ui/refresh").text
+        assert "Composing your first answer" not in failed
+        assert "Ask your first question" in failed
+    finally:
+        with jobs._lock:
+            jobs._jobs.clear()
+
+
+def test_auto_answer_continue_seeds_bounded_restore_state_and_beacons(
+        client, seeded_db, monkeypatch):
+    import logging
+    import time
+    from xbb import jobs
+    from xbb.config import DEFAULT_TENANT_ID
+    from xbb.log import logger as xbb_logger
+
+    monkeypatch.setenv("AUTO_ANSWER_ENABLED", "true")
+    _set_auto_answer(seeded_db, {
+        "v": 1, "status": "ready", "q": "What did I save about RAG?",
+        "answer": "Answer [1].", "citations": ["1001"],
+        "retrieved_ids": ["1001"], "created_at": time.time(),
+    })
+    _set_refresh_done(jobs, DEFAULT_TENANT_ID)
+    seen = []
+    handler = logging.Handler()
+    handler.emit = lambda record: seen.append(record.getMessage())
+    xbb_logger.addHandler(handler)
+    try:
+        html = client.get("/ui/refresh").text
+        assert "localStorage.setItem(&#x27;xbb_thread&#x27;" in html
+        assert ('class="btnlink" href="/ui/ask" '
+                'data-component-id="continue-conversation-cta"') in html
+        assert "auto_answer_continue" in html
+        assert "requestSubmit" not in html  # click restores; it never reruns the stored answer
+        assert client.post("/ui/t?e=auto_answer_continue").status_code == 204
+        assert any(message.startswith("funnel.auto_answer_continued tenant=") for message in seen)
+    finally:
+        xbb_logger.removeHandler(handler)
+        with jobs._lock:
+            jobs._jobs.clear()
+
+
+def test_auto_answer_ready_survives_deleted_citations_and_flag_off_is_inert(
+        client, seeded_db, monkeypatch):
+    import time
+    from xbb import jobs
+    from xbb.config import DEFAULT_TENANT_ID
+
+    state = {
+        "v": 1, "status": "ready", "q": "Question?", "answer": "Stored answer.",
+        "citations": ["deleted"], "retrieved_ids": ["deleted"], "created_at": time.time(),
+    }
+    _set_auto_answer(seeded_db, state)
+    _set_refresh_done(jobs, DEFAULT_TENANT_ID)
+    try:
+        monkeypatch.setenv("AUTO_ANSWER_ENABLED", "true")
+        html = client.get("/ui/refresh").text
+        assert "Stored answer." in html and "From your library" not in html
+        monkeypatch.setenv("AUTO_ANSWER_ENABLED", "false")
+        off = client.get("/ui/refresh").text
+        assert "Stored answer." not in off and "Ask your first question" in off
+    finally:
+        with jobs._lock:
+            jobs._jobs.clear()
+
+
 def test_expired_x_token_shows_reconnect(client, seeded_db):
     """A dead refresh token (jobs sets error=x_connection_expired) must render the friendly
     reconnect prompt + button, not a raw stack trace, and no failing Sync button."""

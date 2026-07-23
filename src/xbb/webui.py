@@ -14,8 +14,8 @@ from fastapi import (APIRouter, Depends, File, Form, HTTPException, Request, Res
                      UploadFile)
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from . import (auth, authui, bookmarks, categorize, credits, ingestion, jobs, landing, mail,
-               sources, storage, xapi, xauth, xconv)
+from . import (auth, authui, autoanswer, bookmarks, categorize, credits, ingestion, jobs,
+               landing, mail, sources, storage, xapi, xauth, xconv)
 from .ask import trim_history
 from .config import Config
 from .deps import get_ai, get_db, resolve_tenant
@@ -256,6 +256,62 @@ def _reconnect_link(prominent: bool = False) -> str:
             '<a href="/oauth/login">Reconnect your X account</a>.</p>')
 
 
+def _done_ctas() -> str:
+    """The established done-state CTA composition, shared by fallback and pending states."""
+    return (
+        '<p><a class="stat" style="display:inline-block;text-decoration:none;margin-right:.6rem" '
+        'href="/ui/ask"><b style="font-size:1rem">Ask your first question →</b>'
+        '<span>“what did I save about…?”</span></a>'
+        '<a class="stat" style="display:inline-block;text-decoration:none" '
+        'href="/ui/feed"><b style="font-size:1rem">Browse your feed →</b>'
+        '<span>color-coded by topic</span></a></p>'
+    )
+
+
+def _thread_state_json(turns: list, groups: list) -> str:
+    """Serialize client-held Ask state safely for embedding in an inline script."""
+    return json.dumps({"h": turns, "s": groups}, separators=(",", ":")).replace("</", "<\\/")
+
+
+def _auto_answer_fragment(con, state: dict, *, capped: bool) -> str:
+    """Render persisted answer/citations; Continue seeds bounded Ask state only when clicked."""
+    citations = [str(i) for i in state["citations"]]
+    cited_posts = posts_by_ids(con, citations)
+    cited = set(citations)
+    refno = {post_id: i + 1 for i, post_id in enumerate(citations)}
+    cards = "".join(_cited_card(post, cited, refno, state["answer"])
+                    for post in cited_posts)
+    sources = trim_sources([{
+        "q": state["q"],
+        "ids": state["retrieved_ids"],
+        "cited": citations,
+    }])
+    turns = trim_history([
+        {"role": "user", "content": state["q"]},
+        {"role": "assistant", "content": state["answer"]},
+    ])
+    payload = _thread_state_json(turns, sources)
+    continue_js = (
+        "try{localStorage.setItem('xbb_thread',JSON.stringify(" + payload + "));"
+        "navigator.sendBeacon('/ui/t?e=auto_answer_continue','')}catch(e){}"
+    )
+    source_html = f'<h3>From your library</h3><div class="cards">{cards}</div>' if cards else ""
+    continue_cta = "" if capped else (
+        '<a class="btnlink" href="/ui/ask" data-component-id="continue-conversation-cta" '
+        f'onclick="{esc(continue_js)}">Continue this conversation →</a>'
+    )
+    return (
+        '<div data-component-id="auto-answer-fragment">'
+        '<div class="answer" style="background:var(--accent-soft);color:var(--accent-ink);'
+        'border-radius:12px;padding:.7rem 1rem;margin:1.6rem 0 .5rem;font-weight:600">'
+        f'{esc(state["q"])}</div>'
+        f'<div class="answer">{md_lite(state["answer"])}</div>'
+        f'{source_html}<p class="row" style="margin-top:1rem">{continue_cta}'
+        '<a class="btnlink ghost" href="/ui/feed">Browse your feed →</a></p>'
+        '</div>'
+    )
+
+
 @ui_router.post("/ui/refresh/{source}")
 def ui_refresh_source(source: str, request: Request):
     try:
@@ -269,7 +325,8 @@ def ui_refresh_source(source: str, request: Request):
 @ui_router.get("/ui/refresh")
 def ui_refresh(request: Request, con=Depends(get_db)):
     cfg = Config.from_env()
-    s = jobs.status(resolve_tenant(request, cfg))
+    tenant = resolve_tenant(request, cfg)
+    s = jobs.status(tenant)
     running = s["running"]
     # First-run: adapt to HOW they signed up. X sign-in already granted bookmark access
     # (one tap = connected); magic-link users still need the Connect X step first.
@@ -298,9 +355,9 @@ def ui_refresh(request: Request, con=Depends(get_db)):
         # The conversion moment: their library just got organized — hand them the next step.
         # Cap-hit free users get honest partial-library framing (value first, price later —
         # the first-answer card and banner carry the actual upsell).
-        if storage.is_capped_free(con, cfg.free_bookmark_limit):
-            logger.info("funnel.upsell_viewed surface=post_sync tenant=%s",
-                        resolve_tenant(request, cfg))
+        capped = storage.is_capped_free(con, cfg.free_bookmark_limit)
+        if capped:
+            logger.info("funnel.upsell_viewed surface=post_sync tenant=%s", tenant)
             # Only claim "you have more" when a sync PROVED it; an exactly-at-cap library
             # is ambiguous (X has no count API) and gets the hedged copy — trust > punch.
             if storage.library_more_exists(con):
@@ -320,15 +377,23 @@ def ui_refresh(request: Request, con=Depends(get_db)):
                 '<p class=lead style="margin-top:1rem">Your bookmarks are organized. '
                 "Now the fun part:</p>"
             )
-        state = (
-            lead
-            + '<p><a class="stat" style="display:inline-block;text-decoration:none;margin-right:.6rem" '
-            'href="/ui/ask"><b style="font-size:1rem">Ask your first question →</b>'
-            "<span>“what did I save about…?”</span></a>"
-            '<a class="stat" style="display:inline-block;text-decoration:none" '
-            'href="/ui/feed"><b style="font-size:1rem">Browse your feed →</b>'
-            "<span>color-coded by topic</span></a></p>"
-        )
+        auto_state = autoanswer.load(con) if cfg.auto_answer_enabled_for(tenant) else None
+        if auto_state and auto_state.get("status") == "ready":
+            if storage.claim_state(con, autoanswer.SHOWN_KEY, "1"):
+                logger.info("funnel.auto_answer_shown tenant=%s", tenant)
+            state = lead + _auto_answer_fragment(con, auto_state, capped=capped)
+        elif autoanswer.is_pending_fresh(auto_state):
+            state = (
+                lead
+                + '<div class="answer" data-component-id="auto-answer-pending">'
+                '<span class="thinking"><span class="spinner"></span> '
+                'Composing your first answer…</span><br>'
+                '<span class=muted>This page refreshes automatically…</span></div>'
+                + _done_ctas()
+                + '<script>setTimeout(function(){location.reload()},3000)</script>'
+            )
+        else:
+            state = lead + _done_ctas()
     elif running:
         state = (
             f'<div class="answer">⏳ <b>{esc(s["step"])}</b> — {esc(s["detail"])}'
@@ -694,14 +759,17 @@ _SNAP_JS = (
 
 def _save_thread_js(turns: list, groups: list) -> str:
     """Persist the finished exchange client-side so navigating away and back restores it."""
-    payload = json.dumps({"h": turns, "s": groups}).replace("</", "<\\/")
+    payload = _thread_state_json(turns, groups)
     return (f"<script>try{{localStorage.setItem('xbb_thread',"
             f"JSON.stringify({payload}))}}catch(e){{}}</script>")
 
 
 # Client-side funnel beacons (sendBeacon → 204). Allowlisted names only; tenant + event,
 # never content — same telemetry rules as ui.view.
-_TRACK_EVENTS = {"composer_focused": "funnel.feed_composer_focused"}
+_TRACK_EVENTS = {
+    "composer_focused": "funnel.feed_composer_focused",
+    "auto_answer_continue": "funnel.auto_answer_continued",
+}
 _TRACK_SOURCES = {"feed"}  # allowlisted `src` attribution values for ask entry points
 
 
@@ -776,13 +844,11 @@ def ui_ask_post(request: Request, question: str = Form(...), history: str = Form
     # Raw post ids leaking into the prose read as garbage numbers (owner report). The prompt
     # now forbids them, but models regress: swap any retrieved id in the text for a numbered
     # [n] marker and number the matching card's badge so the reference points somewhere.
-    refno = {pid: i + 1 for i, pid in enumerate(result["citations"])}
-    ans_text = result.get("answer") or ""
-    for p in retrieved:
-        pid = str(p.get("id") or "")
-        if pid and pid in ans_text:
-            n = refno.setdefault(pid, len(refno) + 1)
-            ans_text = ans_text.replace(f"({pid})", f"[{n}]").replace(pid, f"[{n}]")
+    ans_text, refno = autoanswer.rewrite_citation_ids(
+        result.get("answer"),
+        [str(post.get("id") or "") for post in retrieved],
+        [str(citation) for citation in result["citations"]],
+    )
     # Next form carries the thread + accumulated sources including this exchange.
     new_turns = turns + [{"role": "user", "content": question},
                          {"role": "assistant", "content": ans_text}]

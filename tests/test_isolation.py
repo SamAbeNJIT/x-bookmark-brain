@@ -60,3 +60,25 @@ def test_rls_blocks_writing_as_another_tenant(db, app_db):
             a.commit()
     finally:
         a.close()
+
+
+def test_state_claims_are_independent_per_tenant(db, app_db):
+    """The same F1 key can be claimed once by each tenant, never globally."""
+    owner = storage.connect(db, TENANT_A)
+    try:
+        owner.execute("INSERT INTO accounts (id) VALUES (%s) ON CONFLICT (id) DO NOTHING",
+                      (TENANT_B,))
+        owner.commit()
+    finally:
+        owner.close()
+    a = storage.connect(app_db, TENANT_A)
+    b = storage.connect(app_db, TENANT_B)
+    try:
+        assert storage.claim_state(a, "auto_answer:v1", "tenant-a")
+        assert not storage.claim_state(a, "auto_answer:v1", "duplicate")
+        assert storage.claim_state(b, "auto_answer:v1", "tenant-b")
+        assert storage.get_state(a, "auto_answer:v1") == "tenant-a"
+        assert storage.get_state(b, "auto_answer:v1") == "tenant-b"
+    finally:
+        a.close()
+        b.close()
