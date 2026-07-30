@@ -184,6 +184,14 @@ _STYLE = """
   button:hover { background: var(--accent-ink); }
   button:active { transform: translateY(1px); }
   button.ghost { background: var(--panel); color: var(--muted); border: 1px solid var(--line-2); }
+  .btnlink { display: inline-block; padding: .6rem 1.05rem; font-size: .92rem;
+             font-weight: 600; background: var(--accent); color: #fff; border-radius: 11px;
+             text-decoration: none; transition: background .14s; }
+  .btnlink:hover { background: var(--accent-ink); text-decoration: none; }
+  .btnlink:focus-visible { outline: 3px solid var(--accent-soft); outline-offset: 2px; }
+  .btnlink.ghost { background: var(--panel); color: var(--muted);
+                   border: 1px solid var(--line-2); }
+  .btnlink.ghost:hover { color: var(--accent-ink); border-color: var(--accent); }
   form { margin: .5rem 0; }
   .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
   .thinking { display: inline-flex; align-items: center; gap: .5rem; color: var(--muted);

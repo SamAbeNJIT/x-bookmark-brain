@@ -307,6 +307,17 @@ def set_state(con: psycopg.Connection, key: str, value: str | None) -> None:
     con.commit()
 
 
+def claim_state(con: psycopg.Connection, key: str, value: str) -> bool:
+    """Atomically create tenant state once. The unique tenant/key pair is the claim boundary."""
+    row = con.execute(
+        "INSERT INTO sync_state (key, value) VALUES (%s, %s) "
+        "ON CONFLICT (tenant_id, key) DO NOTHING RETURNING key",
+        (key, value),
+    ).fetchone()
+    con.commit()
+    return row is not None
+
+
 def set_pkce(con: psycopg.Connection, state: str, verifier: str) -> None:
     """Stash an OAuth PKCE verifier (keyed by state) in the DB so the login→callback handshake
     survives across web instances (App Runner autoscaling)."""

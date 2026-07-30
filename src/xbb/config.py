@@ -86,6 +86,9 @@ class Config:
     bedrock_api_key: str | None
     # Model for ask answers (default: the reasoning model). Eval 2026-07-13: Haiku 4.5.
     answer_model: str | None
+    # House-funded, one-time grounded answer after the first eligible enrichment.
+    # "owner" enforces a tenant canary via owner_tenant_id; "all" enables globally.
+    auto_answer_mode: str
     # X Ads Conversion API (server-side registration attribution; see xconv.py). All six
     # must be set or tracking is skipped entirely (fail-safe).
     x_ads_pixel_id: str | None
@@ -95,8 +98,24 @@ class Config:
     x_ads_access_token: str | None
     x_ads_access_secret: str | None
 
+    def auto_answer_enabled_for(self, tenant_id: str) -> bool:
+        """Whether this tenant is inside the configured auto-answer rollout cohort."""
+        return self.auto_answer_mode == "all" or (
+            self.auto_answer_mode == "owner"
+            and self.owner_tenant_id is not None
+            and tenant_id == self.owner_tenant_id
+        )
+
     @classmethod
     def from_env(cls) -> "Config":
+        auto_answer_mode = os.getenv("AUTO_ANSWER_MODE", "").strip().lower()
+        if not auto_answer_mode:
+            # Backward compatibility for existing deployments. New configuration should use
+            # AUTO_ANSWER_MODE so an owner-only canary cannot accidentally become global.
+            legacy_enabled = os.getenv("AUTO_ANSWER_ENABLED", "").lower() in ("1", "true", "yes")
+            auto_answer_mode = "all" if legacy_enabled else "off"
+        if auto_answer_mode not in {"off", "owner", "all"}:
+            raise ValueError("AUTO_ANSWER_MODE must be one of: off, owner, all")
         return cls(
             x_client_id=os.getenv("X_CLIENT_ID"),
             x_redirect_uri=os.getenv("X_REDIRECT_URI", "http://127.0.0.1:8000/oauth/callback"),
@@ -141,6 +160,7 @@ class Config:
             answer_backend=os.getenv("ANSWER_BACKEND", "bedrock"),
             bedrock_api_key=os.getenv("BEDROCK_API_KEY"),
             answer_model=os.getenv("ANSWER_MODEL"),
+            auto_answer_mode=auto_answer_mode,
             x_ads_pixel_id=os.getenv("X_ADS_PIXEL_ID"),
             x_ads_event_id=os.getenv("X_ADS_EVENT_ID"),
             x_ads_consumer_key=os.getenv("X_ADS_CONSUMER_KEY"),
