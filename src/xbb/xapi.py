@@ -14,8 +14,10 @@ from typing import Any, Iterator
 from . import crypto, storage, xauth
 from .config import Config
 from .ingestion import _upsert_post
+from .log import logger
 
 API = "https://api.twitter.com/2"
+_MAX_EMPTY_PAGES = 3  # consecutive empty-but-tokened pages tolerated before giving up
 _TOKEN_KEY = "x_oauth"  # sync_state key holding {access_token, refresh_token, expires_at}
 
 
@@ -163,20 +165,37 @@ class XApiClient:
     def iter_bookmark_pages(self, max_results: int = 100) -> Iterator[dict[str, Any]]:
         """Yield raw v2 pages ({data, includes, meta}), newest-bookmarked first.
         `max_results` shrinks the page for capped fetches — X bills per post RETURNED, so a
-        25-post free sync must not request a 100-post page (4x the cost for the same slice)."""
+        25-post free sync must not request a 100-post page (4x the cost for the same slice).
+
+        X omits posts whose author is deleted, suspended, or protected, so a page deep in an
+        old library can come back with EMPTY data yet still carry a next_token — stopping
+        there silently truncates the library. Empty pages are paged through (bounded:
+        each request is billed, so a malfunctioning API must not be paged forever).
+        Sets `pages_fetched` and `end_reason` ("no_token" | "empty_pages") for the
+        sync.backfill_pages instrumentation."""
         uid = self.me_id()
         token = None
+        empty_streak = 0
+        self.pages_fetched = 0
+        self.end_reason = "no_token"
         while True:
             params = dict(_BOOKMARK_PARAMS)
             params["max_results"] = str(max(1, min(100, max_results)))
             if token:
                 params["pagination_token"] = token
             page = self._get(f"/users/{uid}/bookmarks", params)
-            if not page.get("data"):
-                break
-            yield page
+            self.pages_fetched += 1
+            if page.get("data"):
+                empty_streak = 0
+                yield page
+            else:
+                empty_streak += 1
+                if empty_streak >= _MAX_EMPTY_PAGES:
+                    self.end_reason = "empty_pages"
+                    break
             token = (page.get("meta") or {}).get("next_token")
             if not token:
+                self.end_reason = "no_token"
                 break
             time.sleep(0.5)
 
@@ -196,6 +215,7 @@ def backfill_via_api(con, client_id: str, incremental: bool = True,
     new_ids: list[str] = []   # newly-stored ids, in fetch (newest-first) order
     seen_ids: list[str] = []  # every id seen this run, in fetch order (for full re-rank)
     capped = max_total is not None and total >= max_total
+    caught_up = False
     # Capped fetches request only what fits PLUS ONE: the +1 is the cheapest possible proof
     # that more bookmarks exist (library_more_exists → honest "you have more" upsell copy);
     # without it an exactly-filled page is ambiguous. Uncapped fetches use full pages.
@@ -233,7 +253,10 @@ def backfill_via_api(con, client_id: str, incremental: bool = True,
         # fetched is ~100 billed X-API reads, so overshooting by a page doubles a free user's cost.
         if max_total is not None and total >= max_total:
             capped = True
-        if capped or (incremental and new_in_page == 0):
+        if capped:
+            break
+        if incremental and new_in_page == 0:
+            caught_up = True
             break
     # bm_rank (bookmark order; higher = saved more recently):
     if not incremental and seen_ids:
@@ -249,4 +272,13 @@ def backfill_via_api(con, client_id: str, incremental: bool = True,
         for i, pid in enumerate(reversed(new_ids)):  # oldest-of-batch first
             con.execute("UPDATE posts SET bm_rank = %s WHERE id = %s", (base + 1 + i, pid))
         con.commit()
-    return con.execute("SELECT COUNT(*) FROM posts WHERE source = 'x'").fetchone()[0] - before
+    total_now = con.execute("SELECT COUNT(*) FROM posts WHERE source = 'x'").fetchone()[0]
+    # Why each backfill ENDED, so X-side truncation (the 800 cap, the reported next_token
+    # drop at ~2-3 pages) becomes measurable in CloudWatch instead of anecdotal:
+    # a no_token end after 2-3 FULL pages is the drop signature; capped/caught_up are ours.
+    reason = ("capped" if capped else "caught_up" if caught_up
+              else getattr(client, "end_reason", "exhausted"))
+    logger.info("sync.backfill_pages tenant=%s pages=%d end_reason=%s stored_total=%d",
+                _enc_ctx(con).get("tenant_id", "-"),
+                getattr(client, "pages_fetched", 0), reason, total_now)
+    return total_now - before
