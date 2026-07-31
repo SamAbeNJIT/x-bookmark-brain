@@ -57,11 +57,19 @@ def check_email_page(email: str) -> HTMLResponse:
     return page("Check your email", body)
 
 
-def account_page(email: str) -> HTMLResponse:
-    """A small account/settings stub: shows the signed-in email + a log-out control."""
+def account_page(email: str | None, x_handle: str | None = None) -> HTMLResponse:
+    """A small account/settings page: signed-in identity (X handle and/or email, whichever
+    exist — X-sign-in accounts often have no email yet) + a log-out control."""
+    tiles = ""
+    if x_handle:
+        tiles += f'<div class="stat"><b>X account</b><span>@{esc(x_handle)}</span></div>'
+    if email:
+        tiles += f'<div class="stat"><b>Email</b><span>{esc(email)}</span></div>'
+    if not tiles:
+        tiles = ('<div class="stat"><b>Signed in</b>'
+                 "<span>no email on file — add one via Feedback</span></div>")
     body = (
-        '<div class="stats"><div class="stat"><b>Signed in</b>'
-        f"<span>{esc(email)}</span></div></div>"
+        f'<div class="stats">{tiles}</div>'
         "<p class=lead>You're signed in to your private bookmark brain.</p>"
         '<form method=post action="/auth/logout">'
         '<button class="ghost">Log out</button></form>'

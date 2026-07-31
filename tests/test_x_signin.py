@@ -128,3 +128,73 @@ def test_first_run_sync_page_adapts_to_login_method(client, db, fake_x, monkeypa
     r = client.get("/ui/refresh")
     assert "free" in r.text.lower() and "Sync my first" in r.text
     assert fake_x == []                      # rendering the page never starts a job
+
+
+def test_signin_while_logged_in_attaches_to_email_account(client, db, fake_x):
+    """Owner trap (2026-07-30): an email-account user tapping "Sign in with X" got a twin
+    account and an "empty library". Signed-in + no X identity yet -> ATTACH, never twin."""
+    from xbb import auth
+    from xbb.config import Config
+
+    con = storage.connect(db)
+    try:
+        acct = storage.get_or_create_account(con, "hoarder@example.com")
+    finally:
+        con.close()
+    client.cookies.set("xbb_session",
+                       auth.make_session_token(acct, Config.from_env().session_secret))
+    r = _signin(client)
+    assert r.status_code == 303 and r.headers["location"] == "/"  # returning user, not first-run
+    con = storage.connect(db)
+    try:
+        rows = con.execute("SELECT id, email FROM accounts WHERE x_user_id = '9001'").fetchall()
+        assert [(str(r_[0]), r_[1]) for r_ in rows] == [(acct, "hoarder@example.com")]
+    finally:
+        con.close()
+    assert fake_x == []  # attaching is not a first run: no surprise auto-import
+
+
+def test_signin_with_second_x_persona_keeps_accounts_separate(client, db, fake_x):
+    """A signed-in account that ALREADY has an X identity signing in with a different X
+    account is a separate persona: keep the create-new behavior, never overwrite the link."""
+    from xbb import auth
+    from xbb.config import Config
+
+    con = storage.connect(db)
+    try:
+        acct = storage.get_or_create_account(con, "hoarder@example.com")
+        storage.set_account_x_identity(con, acct, "7777", "first_persona")
+    finally:
+        con.close()
+    client.cookies.set("xbb_session",
+                       auth.make_session_token(acct, Config.from_env().session_secret))
+    _signin(client)  # the fake X identity 9001 is unknown
+    con = storage.connect(db)
+    try:
+        assert storage.account_x_user_id(con, acct) == "7777"  # link untouched
+        row = con.execute("SELECT id FROM accounts WHERE x_user_id = '9001'").fetchone()
+        assert row is not None and str(row[0]) != acct  # a genuinely new account
+    finally:
+        con.close()
+
+
+def test_reclaim_moves_identity_from_squatting_twin(db):
+    """Completing X OAuth proves ownership of the X login: claiming an identity releases it
+    from whichever account holds it (the twin squat that stranded the owner's library)."""
+    con = storage.connect(db)
+    twin = None
+    try:
+        twin = storage.create_account_from_x(con, "9001", "adclicker")
+        acct = storage.get_or_create_account(con, "hoarder@example.com")
+        released = storage.set_account_x_identity(con, acct, "9001", "adclicker")
+        assert released == twin
+        assert storage.account_x_user_id(con, twin) is None
+        assert storage.account_x_user_id(con, acct) == "9001"
+        # no other holder -> nothing released
+        assert storage.set_account_x_identity(con, acct, "9001", "adclicker") is None
+    finally:
+        con.rollback()
+        if twin:  # released twins lose the identity the purge fixture keys on
+            con.execute("DELETE FROM accounts WHERE id = %s", (twin,))
+            con.commit()
+        con.close()

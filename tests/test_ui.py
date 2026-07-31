@@ -515,3 +515,17 @@ def test_taxonomy_derive_via_ui(client):
     r = client.post("/ui/taxonomy/derive", follow_redirects=True)
     assert r.status_code == 200
     assert "RAG" in r.text and "Agents" in r.text  # FakeAI proposes these
+
+
+def test_account_nav_and_signout_button(client):
+    """The Account page (with its Log out button) must be reachable from the sidebar —
+    it existed since the email-auth era but nothing ever linked to it."""
+    from xbb import auth
+    from xbb.config import DEFAULT_TENANT_ID, Config
+
+    assert 'href="/ui/account"' in client.get("/ui/feed").text
+    client.cookies.set(
+        "xbb_session",
+        auth.make_session_token(DEFAULT_TENANT_ID, Config.from_env().session_secret))
+    r = client.get("/ui/account")
+    assert r.status_code == 200 and "Log out" in r.text

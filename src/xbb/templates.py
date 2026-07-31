@@ -394,6 +394,7 @@ _NAV_ITEMS = [
     ("/ui/import", "Import", "⤒"),
     ("/ui/billing", "Billing", "◈"),
     ("/ui/feedback", "Feedback", "✉"),
+    ("/ui/account", "Account", "◉"),
 ]
 
 _SIDEBAR = (

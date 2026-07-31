@@ -241,8 +241,11 @@ def create_app() -> FastAPI:
         account_id = auth.verify_session_token(token, cfg.session_secret) if token else None
         if not account_id:
             return RedirectResponse("/login", status_code=303)
-        email = storage.get_account_email(con, account_id) or "unknown"
-        return authui.account_page(email)
+        row = con.execute(
+            "SELECT email, x_handle FROM accounts WHERE id = %s", (account_id,)
+        ).fetchone()
+        email, x_handle = row if row else (None, None)
+        return authui.account_page(email, x_handle)
 
     # --- billing (prepaid credits + one-time ingestion charge) ---
     def _current_account(request: Request, cfg: Config) -> str:

@@ -147,7 +147,20 @@ def _signin_callback(request: Request, code: str, state: str, error: str,
     account_id = storage.account_by_x_user_id(con, x_id)
     created = account_id is None
     if created:
-        account_id = storage.create_account_from_x(con, x_id, handle)
+        # A signed-in user (typically an email account) tapping "Sign in with X" means
+        # ATTACH this X identity to the account they're already in — spawning a twin
+        # account here stranded the first owner login. Only when the session account has
+        # no X identity yet: one with a different identity linked is a genuinely separate
+        # persona and keeps the create-new behavior.
+        tok_cookie = request.cookies.get("xbb_session")
+        current = (auth.verify_session_token(tok_cookie, cfg.session_secret)
+                   if tok_cookie else None)
+        if current and storage.account_x_user_id(con, current) is None:
+            storage.set_account_x_identity(con, current, x_id, handle)
+            account_id, created = current, False
+            logger.info("auth.x_identity_attached tenant=%s handle=@%s", account_id, handle)
+        else:
+            account_id = storage.create_account_from_x(con, x_id, handle)
     logger.info("auth.x_signin tenant=%s handle=@%s created=%s", account_id, handle, created)
     tcon = storage.connect(cfg.app_database_url, account_id)  # token belongs to THEIR tenant
     try:
@@ -188,8 +201,11 @@ def oauth_callback(request: Request, code: str = "", state: str = "", error: str
         return page("Connect X", f'<div class="answer" style="border-left-color:#d64545">Token exchange failed: {esc(type(e).__name__)}. Check the app settings (Native/public client, redirect URI).</div>')
     try:  # link the X identity so a later "Sign in with X" lands in this same account
         me = xauth.fetch_me(tok["access_token"])
-        storage.set_account_x_identity(con, resolve_tenant(request, cfg),
-                                       str(me["id"]), me.get("username"))
+        tenant_id = resolve_tenant(request, cfg)
+        released = storage.set_account_x_identity(con, tenant_id,
+                                                  str(me["id"]), me.get("username"))
+        if released:
+            logger.info("auth.x_identity_reclaimed tenant=%s from=%s", tenant_id, released)
     except Exception:
         pass  # linking is best-effort; the connect itself already succeeded
     return RedirectResponse(url="/ui/refresh", status_code=303)

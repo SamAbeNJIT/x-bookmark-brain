@@ -399,17 +399,34 @@ def create_account_from_x(con: psycopg.Connection, x_user_id: str, x_handle: str
     return str(row[0])
 
 
+def account_x_user_id(con: psycopg.Connection, account_id: str) -> str | None:
+    """The X identity linked to an account, if any (accounts is the RLS-free registry)."""
+    row = con.execute("SELECT x_user_id FROM accounts WHERE id = %s", (account_id,)).fetchone()
+    return row[0] if row else None
+
+
 def set_account_x_identity(con: psycopg.Connection, account_id: str,
-                           x_user_id: str, x_handle: str | None) -> None:
-    """Link an X identity to an existing (e.g. email) account, so a later 'Sign in with X'
-    lands in the same account. Best-effort: if another account already claims the identity
-    (unique index), keep the existing claim rather than fail the caller's flow."""
+                           x_user_id: str, x_handle: str | None) -> str | None:
+    """Claim an X identity for an account, so a later 'Sign in with X' lands there.
+
+    The caller has just completed X OAuth — possession of the X login is the ownership
+    proof — so if ANOTHER account holds the identity (e.g. a twin auto-created by a
+    sign-in that predated this account's link), release it there and claim it here; the
+    old holder keeps its data and stays reachable by any email it has. Returns the account
+    id the identity was released from, or None. Best-effort under races: a concurrent
+    claim leaves the existing holder in place rather than failing the caller's flow."""
     try:
+        released = con.execute(
+            "UPDATE accounts SET x_user_id = NULL, x_handle = NULL "
+            "WHERE x_user_id = %s AND id <> %s RETURNING id", (x_user_id, account_id)
+        ).fetchone()
         con.execute("UPDATE accounts SET x_user_id = %s, x_handle = %s WHERE id = %s",
                     (x_user_id, x_handle, account_id))
         con.commit()
+        return str(released[0]) if released else None
     except psycopg.errors.UniqueViolation:
         con.rollback()
+        return None
 
 
 # --------------------------------------------------------------------------- billing / plan
